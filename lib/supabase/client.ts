@@ -1,17 +1,22 @@
-import { createClient as createSupabaseClient, type SupabaseClient } from "@supabase/supabase-js"
+import { createClient as createSupabaseClient } from "@supabase/supabase-js"
 
-let client: SupabaseClient | undefined
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabasePublishableKey =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+if (!supabaseUrl) {
+  throw new Error("Thiếu NEXT_PUBLIC_SUPABASE_URL")
+}
+
+if (!supabasePublishableKey) {
+  throw new Error("Thiếu NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
+}
+
+export const supabase = createSupabaseClient(
+  supabaseUrl,
+  supabasePublishableKey,
+)
 
 export function createClient() {
-  if (client) return client
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-
-  if (!url || !publishableKey) {
-    throw new Error("Thiếu cấu hình kết nối Supabase.")
-  }
-
-  client = createSupabaseClient(url, publishableKey)
-  return client
+  return supabase
 }

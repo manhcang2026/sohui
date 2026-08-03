@@ -1,6 +1,6 @@
 "use client"
 
-import { FormEvent, useState } from "react"
+import { type FormEvent, useState } from "react"
 import { useRouter } from "next/navigation"
 import { BookOpen, LoaderCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -20,7 +20,11 @@ export default function LoginPage() {
     setError("")
     setSubmitting(true)
 
-    const { error: authError } = await createClient().auth.signInWithPassword({ email, password })
+    const { error: authError } = await createClient().auth.signInWithPassword({
+      email,
+      password,
+    })
+
     if (authError) {
       setError("Email hoặc mật khẩu không đúng.")
       setSubmitting(false)
@@ -39,21 +43,39 @@ export default function LoginPage() {
             <BookOpen className="size-5" />
           </div>
           <h1 className="text-xl font-bold">Đăng nhập Sổ Hụi</h1>
-          <p className="text-sm text-muted-foreground">Nhập tài khoản để tiếp tục quản lý.</p>
+          <p className="text-sm text-muted-foreground">
+            Nhập tài khoản để tiếp tục quản lý.
+          </p>
         </div>
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Email
-            <Input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+            <Input
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
           </label>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Mật khẩu
-            <Input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
+            <Input
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
           </label>
-          {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+          {error && (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          )}
           <Button type="submit" disabled={submitting}>
             {submitting && <LoaderCircle className="size-4 animate-spin" />}
-            Đăng nhập
+            {submitting ? "Đang đăng nhập..." : "Đăng nhập"}
           </Button>
         </form>
       </Card>
