@@ -10,8 +10,10 @@ import {
   Menu,
   X,
   BookOpen,
+  LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 
 export type Page = "tongguan" | "khui" | "day" | "huivien" | "phieu"
@@ -32,6 +34,11 @@ interface Props {
 
 export function AppShell({ page, onNavigate, children }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  async function handleLogout() {
+    await createClient().auth.signOut()
+    window.location.assign("/login")
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -62,8 +69,12 @@ export function AppShell({ page, onNavigate, children }: Props) {
             </button>
           ))}
         </nav>
-        <div className="px-4 py-3 border-t border-sidebar-border text-xs text-sidebar-foreground/40">
-          v1.0 • Sổ Hụi
+        <div className="border-t border-sidebar-border p-2">
+          <button onClick={handleLogout} className="flex w-full items-center gap-2.5 rounded-md px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground">
+            <LogOut className="size-4" />
+            Đăng xuất
+          </button>
+          <p className="px-3 pt-1 text-xs text-sidebar-foreground/40">v1.0 • Sổ Hụi</p>
         </div>
       </aside>
 
@@ -111,6 +122,12 @@ export function AppShell({ page, onNavigate, children }: Props) {
             </button>
           ))}
         </nav>
+        <div className="border-t border-sidebar-border p-2">
+          <button onClick={handleLogout} className="flex w-full items-center gap-2.5 rounded-md px-3 py-3 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground">
+            <LogOut className="size-4" />
+            Đăng xuất
+          </button>
+        </div>
       </aside>
 
       {/* Main area */}
