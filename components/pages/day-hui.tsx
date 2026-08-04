@@ -15,6 +15,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Trash2,
   Users,
   X,
 } from "lucide-react"
@@ -356,9 +357,11 @@ export function DayHuiPage() {
       {selected ? (
         <DayDetail
           day={selected}
+          members={members}
           membersById={membersById}
           onBack={() => setSelectedId(null)}
           onEdit={() => setEditingGroup(selected)}
+          onDataChanged={loadData}
         />
       ) : (
         <DayList
@@ -1073,17 +1076,310 @@ function GroupDialog({
   )
 }
 
+
+function ShareDialog({
+  day,
+  share,
+  members,
+  onClose,
+  onSaved,
+}: {
+  day: GroupDetail
+  share: HuiShareRow | null
+  members: MemberRow[]
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
+  const usedNumbers = new Set(
+    day.shares
+      .filter((item) => item.id !== share?.id)
+      .map((item) => item.share_number),
+  )
+  const availableNumbers = Array.from(
+    { length: day.total_shares },
+    (_, index) => index + 1,
+  ).filter((number) => !usedNumbers.has(number))
+
+  const [memberId, setMemberId] = useState(
+    share?.member_id ?? members[0]?.id ?? "",
+  )
+  const [shareNumber, setShareNumber] = useState(
+    String(share?.share_number ?? availableNumbers[0] ?? ""),
+  )
+  const [status, setStatus] = useState(share?.status ?? "active")
+  const [joinedAt, setJoinedAt] = useState(
+    share?.joined_at?.slice(0, 10) ?? day.start_date,
+  )
+  const [notes, setNotes] = useState(share?.notes ?? "")
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState("")
+
+  const hasWon = share
+    ? day.periods.some((period) => period.winner_share_id === share.id)
+    : false
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError("")
+
+    const number = Number(shareNumber)
+    if (!memberId) {
+      setError("Bạn cần chọn hụi viên.")
+      return
+    }
+    if (
+      !Number.isInteger(number) ||
+      number < 1 ||
+      number > day.total_shares
+    ) {
+      setError(`Số chân phải từ 1 đến ${day.total_shares}.`)
+      return
+    }
+    if (usedNumbers.has(number)) {
+      setError(`Chân số ${number} đã có người giữ.`)
+      return
+    }
+
+    setSaving(true)
+    const payload = {
+      group_id: day.id,
+      member_id: memberId,
+      share_number: number,
+      status,
+      joined_at: joinedAt || null,
+      notes: notes.trim() || null,
+    }
+
+    const query = share
+      ? createClient().from("hui_shares").update(payload).eq("id", share.id)
+      : createClient().from("hui_shares").insert(payload)
+
+    const { error: saveError } = await query
+    if (saveError) {
+      console.error(saveError)
+      setError(
+        saveError.code === "23505"
+          ? "Số chân này đã tồn tại trong dây."
+          : "Không thể lưu chân hụi.",
+      )
+      setSaving(false)
+      return
+    }
+
+    await onSaved()
+  }
+
+  async function performDelete() {
+    if (!share) return
+    setDeleting(true)
+    setError("")
+
+    const { error: deleteError } = await createClient()
+      .from("hui_shares")
+      .delete()
+      .eq("id", share.id)
+
+    if (deleteError) {
+      console.error(deleteError)
+      setError(
+        "Không thể xóa chân này. Có thể chân đã phát sinh đóng tiền hoặc dữ liệu liên quan.",
+      )
+      setDeleting(false)
+      return
+    }
+
+    await onSaved()
+  }
+
+  async function requestDelete() {
+    if (!share) return
+    if (hasWon) {
+      setError("Chân đã hốt nên không thể xóa.")
+      return
+    }
+    const confirmed = window.confirm(
+      `Xóa chân số ${share.share_number} khỏi dây ${day.name}?`,
+    )
+    if (confirmed) await performDelete()
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-foreground/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="share-dialog-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <Card className="max-h-[90vh] w-full max-w-lg overflow-y-auto p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 id="share-dialog-title" className="text-lg font-bold">
+              {share ? `Sửa chân ${share.share_number}` : "Thêm chân hụi"}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {day.code} • {day.name}
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label="Đóng"
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+
+        <form className="mt-5 flex flex-col gap-4" onSubmit={submit}>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Hụi viên
+            <select
+              required
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={memberId}
+              onChange={(event) => setMemberId(event.target.value)}
+            >
+              <option value="">Chọn hụi viên</option>
+              {[...members]
+                .sort((a, b) =>
+                  a.full_name.localeCompare(b.full_name, "vi"),
+                )
+                .map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.full_name}
+                    {member.phone ? ` — ${member.phone}` : ""}
+                  </option>
+                ))}
+            </select>
+          </label>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Số chân
+              <select
+                required
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={shareNumber}
+                onChange={(event) => setShareNumber(event.target.value)}
+              >
+                {share && (
+                  <option value={share.share_number}>
+                    Chân {share.share_number}
+                  </option>
+                )}
+                {availableNumbers
+                  .filter((number) => number !== share?.share_number)
+                  .map((number) => (
+                    <option key={number} value={number}>
+                      Chân {number}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Trạng thái
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={status}
+                onChange={(event) => setStatus(event.target.value)}
+              >
+                <option value="active">Hoạt động</option>
+                <option value="inactive">Tạm ngưng</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Ngày tham gia
+            <Input
+              type="date"
+              value={joinedAt}
+              onChange={(event) => setJoinedAt(event.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Ghi chú
+            <textarea
+              className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Ví dụ: giữ 2 chân, chuyển nhượng từ kỳ..."
+            />
+          </label>
+
+          {error && (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          )}
+
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              {share && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="text-destructive"
+                  disabled={deleting || saving || hasWon}
+                  onClick={() => void requestDelete()}
+                >
+                  {deleting ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-4" />
+                  )}
+                  Xóa chân
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Hủy
+              </Button>
+              <Button type="submit" disabled={saving || deleting}>
+                {saving && <LoaderCircle className="size-4 animate-spin" />}
+                Lưu chân
+              </Button>
+            </div>
+          </div>
+
+          {hasWon && (
+            <p className="text-xs text-muted-foreground">
+              Chân này đã hốt nên không thể xóa, nhưng vẫn có thể cập nhật
+              trạng thái hoặc ghi chú.
+            </p>
+          )}
+        </form>
+      </Card>
+    </div>
+  )
+}
+
 function DayDetail({
   day,
+  members,
   membersById,
   onBack,
   onEdit,
+  onDataChanged,
 }: {
   day: GroupDetail
+  members: MemberRow[]
   membersById: Map<string, MemberRow>
   onBack: () => void
   onEdit: () => void
+  onDataChanged: () => Promise<void>
 }) {
+  const [editingShare, setEditingShare] = useState<
+    HuiShareRow | null | undefined
+  >(undefined)
+
   const completedPeriods = day.periods.filter((period) =>
     isFinishedPeriod(period.status),
   )
@@ -1220,12 +1516,39 @@ function DayDetail({
           </div>
         </TabsContent>
 
-        <TabsContent value="chan" className="mt-3">
+        <TabsContent value="chan" className="mt-3 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">Danh sách chân hụi</p>
+              <p className="text-xs text-muted-foreground">
+                Đã gán {day.shares.length}/{day.total_shares} chân
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setEditingShare(null)}
+              disabled={day.shares.length >= day.total_shares}
+            >
+              <Plus className="size-4" />
+              Thêm chân
+            </Button>
+          </div>
+
           <Card className="overflow-hidden">
             {day.shares.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                Dây này chưa có chân hụi.
-              </p>
+              <div className="flex flex-col items-center gap-3 py-10 text-center">
+                <Users className="size-8 text-muted-foreground" />
+                <div>
+                  <p className="font-medium">Dây này chưa có chân hụi</p>
+                  <p className="text-sm text-muted-foreground">
+                    Chọn hụi viên và gán vào từng số chân.
+                  </p>
+                </div>
+                <Button onClick={() => setEditingShare(null)}>
+                  <Plus className="size-4" />
+                  Thêm chân đầu tiên
+                </Button>
+              </div>
             ) : (
               <>
                 <div className="hidden overflow-x-auto md:block">
@@ -1239,6 +1562,7 @@ function DayDetail({
                           "Trạng thái",
                           "Đã hốt",
                           "Kỳ hốt",
+                          "Thao tác",
                         ].map((heading) => (
                           <th
                             key={heading}
@@ -1250,80 +1574,119 @@ function DayDetail({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {day.shares.map((share) => {
-                        const member = membersById.get(share.member_id)
-                        const wonPeriod = completedPeriods.find(
-                          (period) => period.winner_share_id === share.id,
-                        )
-                        return (
-                          <tr key={share.id} className="hover:bg-muted/30">
-                            <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                              {share.share_number}
-                            </td>
-                            <td className="px-4 py-2.5 font-medium">
-                              {member?.full_name ?? "Không rõ"}
-                            </td>
-                            <td className="px-4 py-2.5 text-muted-foreground">
-                              {member?.phone ?? "—"}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Badge variant="outline">
-                                {share.status === "active"
-                                  ? "Hoạt động"
-                                  : share.status}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              {wonPeriod ? "Đã hốt" : "Chưa"}
-                            </td>
-                            <td className="px-4 py-2.5 text-muted-foreground">
-                              {wonPeriod
-                                ? `Kỳ ${wonPeriod.period_number}`
-                                : "—"}
-                            </td>
-                          </tr>
-                        )
-                      })}
+                      {[...day.shares]
+                        .sort((a, b) => a.share_number - b.share_number)
+                        .map((share) => {
+                          const member = membersById.get(share.member_id)
+                          const wonPeriod = completedPeriods.find(
+                            (period) => period.winner_share_id === share.id,
+                          )
+                          return (
+                            <tr key={share.id} className="hover:bg-muted/30">
+                              <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
+                                {share.share_number}
+                              </td>
+                              <td className="px-4 py-2.5 font-medium">
+                                {member?.full_name ?? "Không rõ"}
+                              </td>
+                              <td className="px-4 py-2.5 text-muted-foreground">
+                                {member?.phone ?? "—"}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <Badge variant="outline">
+                                  {share.status === "active"
+                                    ? "Hoạt động"
+                                    : "Tạm ngưng"}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                {wonPeriod ? "Đã hốt" : "Chưa"}
+                              </td>
+                              <td className="px-4 py-2.5 text-muted-foreground">
+                                {wonPeriod
+                                  ? `Kỳ ${wonPeriod.period_number}`
+                                  : "—"}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setEditingShare(share)}
+                                >
+                                  <Pencil className="size-4" />
+                                  Sửa
+                                </Button>
+                              </td>
+                            </tr>
+                          )
+                        })}
                     </tbody>
                   </table>
                 </div>
 
                 <div className="divide-y divide-border md:hidden">
-                  {day.shares.map((share) => {
-                    const member = membersById.get(share.member_id)
-                    const wonPeriod = completedPeriods.find(
-                      (period) => period.winner_share_id === share.id,
-                    )
-                    return (
-                      <div
-                        key={share.id}
-                        className="flex items-center justify-between px-4 py-3"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="w-5 font-mono text-xs text-muted-foreground">
-                            {share.share_number}
-                          </span>
-                          <div>
-                            <p className="text-sm font-medium">
-                              {member?.full_name ?? "Không rõ"}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {member?.phone ?? "Chưa có SĐT"}
-                            </p>
+                  {[...day.shares]
+                    .sort((a, b) => a.share_number - b.share_number)
+                    .map((share) => {
+                      const member = membersById.get(share.member_id)
+                      const wonPeriod = completedPeriods.find(
+                        (period) => period.winner_share_id === share.id,
+                      )
+                      return (
+                        <div
+                          key={share.id}
+                          className="flex items-center justify-between gap-3 px-4 py-3"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="w-6 shrink-0 font-mono text-xs text-muted-foreground">
+                              {share.share_number}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">
+                                {member?.full_name ?? "Không rõ"}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {member?.phone ?? "Chưa có SĐT"} •{" "}
+                                {wonPeriod
+                                  ? `Hốt kỳ ${wonPeriod.period_number}`
+                                  : "Chưa hốt"}
+                              </p>
+                            </div>
                           </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setEditingShare(share)}
+                            aria-label={`Sửa chân ${share.share_number}`}
+                          >
+                            <Pencil className="size-4" />
+                          </Button>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          {wonPeriod
-                            ? `Hốt kỳ ${wonPeriod.period_number}`
-                            : "Chưa hốt"}
-                        </p>
-                      </div>
-                    )
-                  })}
+                      )
+                    })}
                 </div>
               </>
             )}
           </Card>
+
+          {day.shares.length >= day.total_shares && (
+            <p className="text-xs text-muted-foreground">
+              Dây đã đủ {day.total_shares} chân.
+            </p>
+          )}
+
+          {editingShare !== undefined && (
+            <ShareDialog
+              day={day}
+              share={editingShare}
+              members={members}
+              onClose={() => setEditingShare(undefined)}
+              onSaved={async () => {
+                setEditingShare(undefined)
+                await onDataChanged()
+              }}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="lich" className="mt-3">
