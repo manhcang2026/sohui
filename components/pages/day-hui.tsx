@@ -43,6 +43,8 @@ type HuiGroupRow = {
   interval_days: number | null
   start_date: string
   fee_amount: number
+  minimum_bid_amount: number
+  bid_step_amount: number
   status: string
   notes: string | null
   frequency_type: FrequencyType
@@ -73,6 +75,8 @@ type HuiPeriodRow = {
   winner_share_id: string | null
   bid_amount: number
   fee_amount: number
+  minimum_bid_amount: number
+  bid_step_amount: number
   status: string
   notes: string | null
   created_at: string
@@ -100,6 +104,8 @@ type GroupForm = {
   start_date: string
   opening_time: string
   fee_amount: string
+  minimum_bid_amount: string
+  bid_step_amount: string
   status: string
   notes: string
 }
@@ -231,6 +237,37 @@ function generateSchedule(
   })
 }
 
+
+function calculateEstimatedEndDate(
+  startDate: string,
+  totalPeriods: number,
+  frequencyType: FrequencyType,
+  frequencyValue: number,
+) {
+  if (!startDate || totalPeriods <= 0 || frequencyValue <= 0) return null
+
+  const [year, month, day] = startDate.split("-").map(Number)
+  const baseDate = new Date(year, month - 1, day)
+  const lastIndex = totalPeriods - 1
+
+  if (frequencyType === "months") {
+    return toDateOnly(
+      addMonthsClamped(
+        baseDate,
+        lastIndex * frequencyValue,
+        day,
+      ),
+    )
+  }
+
+  const multiplier = frequencyType === "weeks" ? 7 : 1
+  const result = new Date(baseDate)
+  result.setDate(
+    baseDate.getDate() + lastIndex * frequencyValue * multiplier,
+  )
+  return toDateOnly(result)
+}
+
 function numericValue(value: string) {
   const digits = value.replace(/\D/g, "")
   return digits ? Number(digits) : 0
@@ -272,7 +309,7 @@ export function DayHuiPage() {
         supabase
           .from("hui_groups")
           .select(
-            "id, code, name, contribution_amount, total_shares, interval_days, start_date, fee_amount, status, notes, frequency_type, frequency_value, opening_time, created_at, updated_at",
+            "id, code, name, contribution_amount, total_shares, interval_days, start_date, fee_amount, minimum_bid_amount, bid_step_amount, status, notes, frequency_type, frequency_value, opening_time, created_at, updated_at",
           )
           .order("start_date", { ascending: false }),
         supabase
@@ -561,6 +598,12 @@ function GroupDialog({
           start_date: group.start_date,
           opening_time: group.opening_time?.slice(0, 5) ?? "19:00",
           fee_amount: formatMoneyInput(String(group.fee_amount)),
+          minimum_bid_amount: formatMoneyInput(
+            String(group.minimum_bid_amount ?? 0),
+          ),
+          bid_step_amount: formatMoneyInput(
+            String(group.bid_step_amount ?? 0),
+          ),
           status: group.status,
           notes: group.notes ?? "",
         }
@@ -571,6 +614,7 @@ function GroupDialog({
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  const [feeManuallyEdited, setFeeManuallyEdited] = useState(Boolean(group))
 
   const setField = (key: keyof GroupForm, value: string) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -583,6 +627,8 @@ function GroupDialog({
     const totalShares = Number(form.total_shares)
     const frequencyValue = Number(form.frequency_value)
     const feeAmount = numericValue(form.fee_amount)
+    const minimumBidAmount = numericValue(form.minimum_bid_amount)
+    const bidStepAmount = numericValue(form.bid_step_amount)
 
     if (!form.code.trim()) {
       setError("Mã dây là bắt buộc.")
@@ -602,6 +648,14 @@ function GroupDialog({
     }
     if (!Number.isInteger(frequencyValue) || frequencyValue <= 0) {
       setError("Khoảng cách chu kỳ phải lớn hơn 0.")
+      return
+    }
+    if (minimumBidAmount < 0) {
+      setError("Giá thăm tối thiểu không được âm.")
+      return
+    }
+    if (bidStepAmount <= 0) {
+      setError("Bước thăm phải lớn hơn 0.")
       return
     }
     if (!form.start_date) {
@@ -631,6 +685,8 @@ function GroupDialog({
       interval_days: intervalDays,
       start_date: form.start_date,
       fee_amount: feeAmount,
+      minimum_bid_amount: minimumBidAmount,
+      bid_step_amount: bidStepAmount,
       status: form.status,
       notes: form.notes.trim() || null,
       frequency_type: form.frequency_type,
@@ -808,6 +864,22 @@ function GroupDialog({
     form.total_shares,
   ])
 
+  const estimatedEndDate = useMemo(
+    () =>
+      calculateEstimatedEndDate(
+        form.start_date,
+        Number(form.total_shares),
+        form.frequency_type,
+        Number(form.frequency_value),
+      ),
+    [
+      form.frequency_type,
+      form.frequency_value,
+      form.start_date,
+      form.total_shares,
+    ],
+  )
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 p-4"
@@ -876,12 +948,22 @@ function GroupDialog({
                   inputMode="numeric"
                   required
                   value={form.contribution_amount}
-                  onChange={(event) =>
-                    setField(
-                      "contribution_amount",
-                      formatMoneyInput(event.target.value),
-                    )
-                  }
+                  onChange={(event) => {
+                    const formatted = formatMoneyInput(event.target.value)
+                    setField("contribution_amount", formatted)
+
+                    if (!feeManuallyEdited) {
+                      const amount = numericValue(formatted)
+                      setField(
+                        "fee_amount",
+                        amount > 0
+                          ? formatMoneyInput(
+                              String(Math.round(amount * 0.03)),
+                            )
+                          : "",
+                      )
+                    }
+                  }}
                   placeholder="Ví dụ: 3.000.000đ"
                   className="pr-10"
                 />
@@ -906,7 +988,7 @@ function GroupDialog({
             </label>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Kiểu chu kỳ
+              Tần suất khui
               <select
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 disabled={scheduleLocked}
@@ -925,12 +1007,14 @@ function GroupDialog({
             </label>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Mỗi bao nhiêu{" "}
-              {form.frequency_type === "days"
-                ? "ngày"
-                : form.frequency_type === "weeks"
-                  ? "tuần"
-                  : "tháng"}
+              Chu kỳ lặp lại
+              <span className="text-xs font-normal text-muted-foreground">
+                {form.frequency_type === "days"
+                  ? "Nhập 1 = mỗi ngày, 2 = mỗi 2 ngày"
+                  : form.frequency_type === "weeks"
+                    ? "Nhập 1 = mỗi tuần, 2 = mỗi 2 tuần"
+                    : "Nhập 1 = mỗi tháng, 2 = mỗi 2 tháng"}
+              </span>
               <Input
                 type="number"
                 min="1"
@@ -979,9 +1063,34 @@ function GroupDialog({
                 <Input
                   inputMode="numeric"
                   value={form.fee_amount}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setFeeManuallyEdited(true)
                     setField(
                       "fee_amount",
+                      formatMoneyInput(event.target.value),
+                    )
+                  }}
+                  placeholder="Mặc định 3% mệnh giá"
+                  className="pr-10"
+                />
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                  đ
+                </span>
+              </div>
+              <span className="text-xs font-normal text-muted-foreground">
+                Tự tính 3% mệnh giá, có thể sửa lại.
+              </span>
+            </label>
+
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Giá thăm tối thiểu
+              <div className="relative">
+                <Input
+                  inputMode="numeric"
+                  value={form.minimum_bid_amount}
+                  onChange={(event) =>
+                    setField(
+                      "minimum_bid_amount",
                       formatMoneyInput(event.target.value),
                     )
                   }
@@ -992,6 +1101,30 @@ function GroupDialog({
                   đ
                 </span>
               </div>
+            </label>
+
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Bước thăm
+              <div className="relative">
+                <Input
+                  inputMode="numeric"
+                  value={form.bid_step_amount}
+                  onChange={(event) =>
+                    setField(
+                      "bid_step_amount",
+                      formatMoneyInput(event.target.value),
+                    )
+                  }
+                  placeholder="Ví dụ: 50.000đ"
+                  className="pr-10"
+                />
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                  đ
+                </span>
+              </div>
+              <span className="text-xs font-normal text-muted-foreground">
+                Ví dụ: 100.000 → 150.000 → 200.000.
+              </span>
             </label>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -1021,6 +1154,31 @@ function GroupDialog({
               />
             </label>
           </div>
+
+          {estimatedEndDate && (
+            <Card className="grid gap-3 p-4 sm:grid-cols-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Dự kiến mãn hụi</p>
+                <p className="font-semibold">
+                  {formatDate(estimatedEndDate)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">
+                  Giá thăm tối thiểu
+                </p>
+                <p className="font-semibold">
+                  {formatVND(numericValue(form.minimum_bid_amount))}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Bước thăm</p>
+                <p className="font-semibold">
+                  {formatVND(numericValue(form.bid_step_amount))}
+                </p>
+              </div>
+            </Card>
+          )}
 
           {!scheduleLocked && schedulePreview.length > 0 && (
             <Card className="p-4">
@@ -1558,7 +1716,7 @@ function DayDetail({
         </TabsList>
 
         <TabsContent value="tongquan" className="mt-3 space-y-3">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             {[
               {
                 label: "Tiến độ",
@@ -1569,6 +1727,14 @@ function DayDetail({
                 value: formatVND(day.contribution_amount),
               },
               { label: "Tiền thảo", value: formatVND(day.fee_amount) },
+              {
+                label: "Thăm tối thiểu",
+                value: formatVND(day.minimum_bid_amount),
+              },
+              {
+                label: "Bước thăm",
+                value: formatVND(day.bid_step_amount),
+              },
               {
                 label: "Kỳ tiếp",
                 value: nextPeriod
