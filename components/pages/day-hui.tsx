@@ -234,6 +234,12 @@ function numericValue(value: string) {
   return Number(value.replace(/[^\d.-]/g, ""))
 }
 
+function formatMoneyInput(value: string) {
+  const digits = value.replace(/\D/g, "")
+  if (!digits) return ""
+  return new Intl.NumberFormat("vi-VN").format(Number(digits))
+}
+
 function autoCode(groups: HuiGroupRow[]) {
   const maxNumber = groups.reduce((max, group) => {
     const match = group.code?.match(/(\d+)$/)
@@ -544,13 +550,13 @@ function GroupDialog({
       ? {
           code: group.code ?? "",
           name: group.name,
-          contribution_amount: String(group.contribution_amount),
+          contribution_amount: formatMoneyInput(String(group.contribution_amount)),
           total_shares: String(group.total_shares),
           frequency_type: group.frequency_type,
           frequency_value: String(group.frequency_value),
           start_date: group.start_date,
           opening_time: group.opening_time?.slice(0, 5) ?? "19:00",
-          fee_amount: String(group.fee_amount),
+          fee_amount: formatMoneyInput(String(group.fee_amount)),
           status: group.status,
           notes: group.notes ?? "",
         }
@@ -861,15 +867,24 @@ function GroupDialog({
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Mệnh giá mỗi chân
-              <Input
-                inputMode="numeric"
-                required
-                value={form.contribution_amount}
-                onChange={(event) =>
-                  setField("contribution_amount", event.target.value)
-                }
-                placeholder="1000000"
-              />
+              <div className="relative">
+                <Input
+                  inputMode="numeric"
+                  required
+                  value={form.contribution_amount}
+                  onChange={(event) =>
+                    setField(
+                      "contribution_amount",
+                      formatMoneyInput(event.target.value),
+                    )
+                  }
+                  placeholder="3.000.000"
+                  className="pr-10"
+                />
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                  đ
+                </span>
+              </div>
             </label>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -956,14 +971,23 @@ function GroupDialog({
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Tiền thảo
-              <Input
-                inputMode="numeric"
-                value={form.fee_amount}
-                onChange={(event) =>
-                  setField("fee_amount", event.target.value)
-                }
-                placeholder="0"
-              />
+              <div className="relative">
+                <Input
+                  inputMode="numeric"
+                  value={form.fee_amount}
+                  onChange={(event) =>
+                    setField(
+                      "fee_amount",
+                      formatMoneyInput(event.target.value),
+                    )
+                  }
+                  placeholder="0"
+                  className="pr-10"
+                />
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                  đ
+                </span>
+              </div>
             </label>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
