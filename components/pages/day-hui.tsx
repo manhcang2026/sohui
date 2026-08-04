@@ -1747,7 +1747,7 @@ function PeriodDialog({
                 : `Nhập kết quả kỳ ${period.period_number}`}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {day.code} • {formatDate(period.scheduled_date)}
+              {day.code} • {day.name} • {formatDate(period.scheduled_date)}
             </p>
           </div>
           <Button
@@ -1805,12 +1805,7 @@ function PeriodDialog({
           </label>
 
           <Card className="flex items-center justify-between gap-4 p-3">
-            <div>
-              <p className="text-sm font-medium">Tiền thảo cố định</p>
-              <p className="text-xs text-muted-foreground">
-                Tự lấy theo mức đã khai báo của dây và không thể thay đổi theo từng kỳ.
-              </p>
-            </div>
+            <p className="text-sm font-medium">Tiền thảo</p>
             <p className="shrink-0 font-semibold">
               {formatVND(day.fee_amount)}
             </p>
