@@ -231,7 +231,8 @@ function generateSchedule(
 }
 
 function numericValue(value: string) {
-  return Number(value.replace(/[^\d.-]/g, ""))
+  const digits = value.replace(/\D/g, "")
+  return digits ? Number(digits) : 0
 }
 
 function formatMoneyInput(value: string) {
@@ -878,7 +879,7 @@ function GroupDialog({
                       formatMoneyInput(event.target.value),
                     )
                   }
-                  placeholder="3.000.000"
+                  placeholder="Ví dụ: 3.000.000đ"
                   className="pr-10"
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
@@ -981,7 +982,7 @@ function GroupDialog({
                       formatMoneyInput(event.target.value),
                     )
                   }
-                  placeholder="0"
+                  placeholder="Ví dụ: 100.000đ"
                   className="pr-10"
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
