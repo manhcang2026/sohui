@@ -1114,6 +1114,10 @@ function ShareDialog({
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState("")
+  const [addMode, setAddMode] = useState<"quick" | "specific">(
+    share ? "specific" : "quick",
+  )
+  const [quantity, setQuantity] = useState("1")
 
   const hasWon = share
     ? day.periods.some((period) => period.winner_share_id === share.id)
@@ -1123,11 +1127,57 @@ function ShareDialog({
     event.preventDefault()
     setError("")
 
-    const number = Number(shareNumber)
     if (!memberId) {
       setError("Bạn cần chọn hụi viên.")
       return
     }
+
+    const supabase = createClient()
+
+    if (!share && addMode === "quick") {
+      const count = Number(quantity)
+      if (!Number.isInteger(count) || count <= 0) {
+        setError("Số lượng chân phải là số nguyên lớn hơn 0.")
+        return
+      }
+      if (count > availableNumbers.length) {
+        setError(
+          `Dây chỉ còn ${availableNumbers.length} chân trống, không thể thêm ${count} chân.`,
+        )
+        return
+      }
+
+      setSaving(true)
+      const numbersToUse = availableNumbers.slice(0, count)
+      const payloads = numbersToUse.map((number) => ({
+        group_id: day.id,
+        member_id: memberId,
+        share_number: number,
+        status,
+        joined_at: joinedAt || null,
+        notes: notes.trim() || null,
+      }))
+
+      const { error: saveError } = await supabase
+        .from("hui_shares")
+        .insert(payloads)
+
+      if (saveError) {
+        console.error(saveError)
+        setError(
+          saveError.code === "23505"
+            ? "Một trong các số chân vừa chọn đã được sử dụng. Hãy thử lại."
+            : "Không thể thêm nhanh các chân hụi.",
+        )
+        setSaving(false)
+        return
+      }
+
+      await onSaved()
+      return
+    }
+
+    const number = Number(shareNumber)
     if (
       !Number.isInteger(number) ||
       number < 1 ||
@@ -1152,8 +1202,8 @@ function ShareDialog({
     }
 
     const query = share
-      ? createClient().from("hui_shares").update(payload).eq("id", share.id)
-      : createClient().from("hui_shares").insert(payload)
+      ? supabase.from("hui_shares").update(payload).eq("id", share.id)
+      : supabase.from("hui_shares").insert(payload)
 
     const { error: saveError } = await query
     if (saveError) {
@@ -1257,6 +1307,50 @@ function ShareDialog({
             </select>
           </label>
 
+          {!share && (
+            <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
+              <button
+                type="button"
+                onClick={() => setAddMode("quick")}
+                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  addMode === "quick"
+                    ? "bg-background shadow-sm"
+                    : "text-muted-foreground"
+                }`}
+              >
+                Thêm nhanh
+              </button>
+              <button
+                type="button"
+                onClick={() => setAddMode("specific")}
+                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  addMode === "specific"
+                    ? "bg-background shadow-sm"
+                    : "text-muted-foreground"
+                }`}
+              >
+                Chọn số cụ thể
+              </button>
+            </div>
+          )}
+
+          {!share && addMode === "quick" ? (
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Số lượng chân
+              <Input
+                type="number"
+                min="1"
+                max={availableNumbers.length}
+                required
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+              />
+              <span className="text-xs font-normal text-muted-foreground">
+                Hệ thống tự lấy {quantity || "0"} số chân trống nhỏ nhất.
+                Hiện còn {availableNumbers.length} chân trống.
+              </span>
+            </label>
+          ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Số chân
@@ -1293,6 +1387,7 @@ function ShareDialog({
               </select>
             </label>
           </div>
+          )}
 
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Ngày tham gia
@@ -1312,6 +1407,18 @@ function ShareDialog({
               placeholder="Ví dụ: giữ 2 chân, chuyển nhượng từ kỳ..."
             />
           </label>
+
+          {!share && addMode === "quick" && Number(quantity) > 0 && (
+            <Card className="p-3">
+              <p className="text-sm font-medium">Xem trước</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Hụi viên này sẽ được thêm vào các chân:{" "}
+                {availableNumbers
+                  .slice(0, Math.max(0, Number(quantity)))
+                  .join(", ") || "—"}
+              </p>
+            </Card>
+          )}
 
           {error && (
             <p className="text-sm text-destructive" role="alert">
@@ -1344,7 +1451,9 @@ function ShareDialog({
               </Button>
               <Button type="submit" disabled={saving || deleting}>
                 {saving && <LoaderCircle className="size-4 animate-spin" />}
-                Lưu chân
+                {!share && addMode === "quick"
+                  ? `Thêm ${quantity || 0} chân`
+                  : "Lưu chân"}
               </Button>
             </div>
           </div>
