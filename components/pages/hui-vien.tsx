@@ -648,114 +648,124 @@ export function HuiVienPage() {
         </Card>
       ) : (
         <>
-          <Card className="hidden overflow-hidden md:block">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  {[
-                    "Họ tên",
-                    "Điện thoại",
-                    "Số Zalo",
-                    "Ngân hàng",
-                    "Đánh giá",
-                    "Trạng thái",
-                    "Thao tác",
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
+          <Card className="hidden md:block">
+            <div className="w-full overflow-x-auto">
+              <table className="min-w-[980px] w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    {[
+                      "Họ tên",
+                      "Điện thoại / Zalo",
+                      "Ngân hàng",
+                      "Đánh giá",
+                      "Trạng thái",
+                      "Thao tác",
+                    ].map((heading) => (
+                      <th
+                        key={heading}
+                        className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
 
-              <tbody className="divide-y divide-border">
-                {filteredProfiles.map((profile) => {
-                  const member = profile.member
-                  const meta = riskMeta(profile.risk)
+                <tbody className="divide-y divide-border">
+                  {filteredProfiles.map((profile) => {
+                    const member = profile.member
+                    const meta = riskMeta(profile.risk)
 
-                  return (
-                    <tr
-                      key={member.id}
-                      className="cursor-pointer hover:bg-muted/30"
-                      onClick={() => setSelectedMemberId(member.id)}
-                    >
-                      <td className="px-4 py-3">
-                        <button
-                          className="text-left font-medium hover:underline"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedMemberId(member.id)
-                          }}
-                        >
-                          {member.full_name}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {member.phone || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {member.zalo_phone || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {member.bank_name || "—"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
-                        >
-                          <meta.Icon className="size-3.5" />
-                          {meta.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void toggleActive(member)
-                          }}
-                          className={
-                            member.is_active
-                              ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
-                              : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
-                          }
-                        >
-                          {member.is_active ? "Hoạt động" : "Tạm ngưng"}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                    return (
+                      <tr
+                        key={member.id}
+                        className="cursor-pointer hover:bg-muted/30"
+                        onClick={() => setSelectedMemberId(member.id)}
+                      >
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <button
+                            className="text-left font-medium hover:underline"
                             onClick={(event) => {
                               event.stopPropagation()
                               setSelectedMemberId(member.id)
                             }}
                           >
-                            <WalletCards className="size-4" />
-                            Tiền bạc
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                            {member.full_name}
+                          </button>
+                        </td>
+
+                        <td className="px-4 py-3 text-muted-foreground">
+                          <div className="min-w-[150px]">
+                            <p className="whitespace-nowrap">
+                              ĐT: {member.phone || "—"}
+                            </p>
+                            <p className="whitespace-nowrap text-xs">
+                              Zalo: {member.zalo_phone || "—"}
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
+                          {member.bank_name || "—"}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
+                          >
+                            <meta.Icon className="size-3.5" />
+                            {meta.label}
+                          </span>
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <button
                             onClick={(event) => {
                               event.stopPropagation()
-                              setEditing(member)
+                              void toggleActive(member)
                             }}
+                            className={
+                              member.is_active
+                                ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
+                                : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
+                            }
                           >
-                            <Pencil className="size-4" />
-                            Sửa
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                            {member.is_active ? "Hoạt động" : "Tạm ngưng"}
+                          </button>
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <div className="flex min-w-[190px] items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setSelectedMemberId(member.id)
+                              }}
+                            >
+                              <WalletCards className="size-4" />
+                              Tiền bạc
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setEditing(member)
+                              }}
+                            >
+                              <Pencil className="size-4" />
+                              Sửa
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </Card>
 
           <div className="flex flex-col gap-2 md:hidden">
