@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   CalendarRange,
   CheckCheck,
+  Coins,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -668,6 +669,56 @@ export function CanDoiPage() {
     }
   }
 
+
+  const feeSummary = useMemo(() => {
+    const groupsById = new Map(groups.map((group) => [group.id, group]))
+
+    const items = periods
+      .filter(
+        (period) =>
+          isCompleted(period.status) &&
+          period.winner_share_id &&
+          period.scheduled_date >= dateFrom &&
+          period.scheduled_date <= dateTo,
+      )
+      .map((period) => {
+        const group = groupsById.get(period.group_id)
+        const fee = Number(period.fee_amount ?? group?.fee_amount ?? 0)
+
+        const relatedPayments = payments.filter(
+          (payment) =>
+            payment.source_period_id === period.id &&
+            payment.status === "active",
+        )
+
+        const isFullyRecorded =
+          relatedPayments.length > 0 &&
+          relatedPayments.some((payment) => payment.direction === "pay")
+
+        return {
+          period,
+          groupName: group?.name ?? "Không rõ dây",
+          fee,
+          isFullyRecorded,
+        }
+      })
+      .sort((a, b) => {
+        const byDate = b.period.scheduled_date.localeCompare(
+          a.period.scheduled_date,
+        )
+        if (byDate !== 0) return byDate
+        return b.period.period_number - a.period.period_number
+      })
+
+    return {
+      items,
+      totalFee: items.reduce((sum, item) => sum + item.fee, 0),
+      recordedFee: items
+        .filter((item) => item.isFullyRecorded)
+        .reduce((sum, item) => sum + item.fee, 0),
+    }
+  }, [dateFrom, dateTo, groups, payments, periods])
+
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("vi")
     if (!normalized) return balances
@@ -892,6 +943,58 @@ export function CanDoiPage() {
           thu/chi trong app. Nó chưa bao gồm tiền ngoài hệ thống hoặc số dư tiền
           mặt đầu kỳ.
         </p>
+      </Card>
+
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2">
+          <Coins className="size-5" />
+          <h2 className="font-bold">Tiền thảo / lợi nhuận chủ hụi</h2>
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Tiền thảo là doanh thu của chủ hụi theo từng kỳ đã chốt. Giá thăm
+          không được tính là lợi nhuận của chủ hụi.
+        </p>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <Metric
+            label="Số kỳ đã chốt"
+            value={String(feeSummary.items.length)}
+          />
+          <Metric
+            label="Tiền thảo phát sinh"
+            value={formatVND(feeSummary.totalFee)}
+            emphasize
+          />
+          <Metric
+            label="Đã ghi nhận qua chốt nhanh"
+            value={formatVND(feeSummary.recordedFee)}
+          />
+        </div>
+
+        {feeSummary.items.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {feeSummary.items.map((item) => (
+              <div
+                key={item.period.id}
+                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    {item.groupName} · Kỳ {item.period.period_number}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.period.scheduled_date} ·{" "}
+                    {item.isFullyRecorded
+                      ? "Đã ghi nhận thu/chi đủ"
+                      : "Chưa xác nhận đủ trên hệ thống"}
+                  </p>
+                </div>
+                <p className="shrink-0 font-bold">{formatVND(item.fee)}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
