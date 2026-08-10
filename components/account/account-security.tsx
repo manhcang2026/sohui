@@ -7,7 +7,6 @@ import {
   RefreshCw,
   RotateCcw,
   Shield,
-  Smartphone,
   UserPlus,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -121,21 +120,6 @@ export function AccountSecurity() {
 
   return (
     <div className="space-y-4">
-      {isSuper && !profile?.phone && (
-        <MigrateSelfToPhone
-          profile={profile}
-          onSuccess={(text) => {
-            setMessage(text)
-            setError("")
-            void loadAll()
-          }}
-          onError={(text) => {
-            setError(text)
-            setMessage("")
-          }}
-        />
-      )}
-
       {profile?.phone && (
         <ChangePinCard
           profile={profile}
@@ -169,107 +153,6 @@ export function AccountSecurity() {
       {message && <p className="text-sm font-medium text-status-green-fg">{message}</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
-  )
-}
-
-function MigrateSelfToPhone({
-  profile,
-  onSuccess,
-  onError,
-}: {
-  profile: CurrentProfile
-  onSuccess: (message: string) => void
-  onError: (message: string) => void
-}) {
-  const [phone, setPhone] = useState("")
-  const [pin, setPin] = useState("")
-  const [saving, setSaving] = useState(false)
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!isFourDigitPin(pin)) {
-      onError("PIN mới phải gồm đúng 4 số.")
-      return
-    }
-
-    setSaving(true)
-    try {
-      const normalizedPhone = normalizeVietnamPhone(phone)
-      const { data } = await createClient().auth.getSession()
-      const token = data.session?.access_token ?? ""
-
-      const response = await fetch("/api/admin/users", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          auth_user_id: profile.auth_user_id,
-          action: "migrate_self_to_phone",
-          phone: normalizedPhone,
-          pin,
-        }),
-      })
-      const result = await response.json()
-
-      if (!response.ok) {
-        onError(result.error ?? "Không chuyển được tài khoản sang SĐT.")
-        return
-      }
-
-      onSuccess(
-        `Đã gắn SĐT ${displayVietnamPhone(result.phone)}. Hãy logout rồi đăng nhập lại bằng SĐT + PIN mới.`,
-      )
-    } catch (caught) {
-      onError(caught instanceof Error ? caught.message : "Không chuyển được tài khoản.")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card className="border-primary/30 p-4">
-      <div className="flex items-center gap-2">
-        <Smartphone className="size-5" />
-        <div>
-          <h2 className="font-semibold">Chuyển tài khoản của bạn sang SĐT</h2>
-          <p className="text-xs text-muted-foreground">
-            Tài khoản hiện tại vẫn đang là {profile.email}. Làm bước này một lần.
-          </p>
-        </div>
-      </div>
-
-      <form className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end" onSubmit={submit}>
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          SĐT của bạn
-          <Input
-            inputMode="tel"
-            required
-            value={phone}
-            onChange={(event) => setPhone(event.target.value)}
-            placeholder="09xxxxxxxx"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1.5 text-sm font-medium">
-          PIN mới 4 số
-          <Input
-            inputMode="numeric"
-            type="password"
-            maxLength={4}
-            required
-            value={pin}
-            onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
-          />
-        </label>
-
-        <Button type="submit" disabled={saving}>
-          {saving ? <LoaderCircle className="size-4 animate-spin" /> : <Smartphone className="size-4" />}
-          Chuyển sang SĐT
-        </Button>
-      </form>
-    </Card>
   )
 }
 
