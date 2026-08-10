@@ -8,7 +8,6 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { createClient } from "@/lib/supabase/client"
 import {
-  authPasswordFromPin,
   isFourDigitPin,
   normalizeVietnamPhone,
 } from "@/lib/auth/passcode"
@@ -32,40 +31,35 @@ export default function LoginPage() {
     setSubmitting(true)
 
     try {
-      const supabase = createClient()
       const normalizedPhone = normalizeVietnamPhone(phone)
-      const internalPassword = authPasswordFromPin(pin)
 
-      // Chuẩn chính thức của app: PIN 0000 -> password nội bộ SOHUI-0000.
-      let result = await supabase.auth.signInWithPassword({
-        phone: normalizedPhone,
-        password: internalPassword,
+      const response = await fetch("/api/auth/phone-login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          phone: normalizedPhone,
+          pin,
+        }),
       })
 
-      // CỨU HỘ / MIGRATION:
-      // Nếu user từng reset password trực tiếp trong Supabase thành đúng "0000",
-      // thử PIN thô một lần. Nếu login được, tự chuyển ngay về password nội bộ.
-      if (result.error) {
-        const legacyResult = await supabase.auth.signInWithPassword({
-          phone: normalizedPhone,
-          password: pin,
-        })
+      const result = await response.json()
 
-        if (!legacyResult.error && legacyResult.data.session) {
-          const { error: migrateError } = await supabase.auth.updateUser({
-            password: internalPassword,
-          })
-
-          if (migrateError) {
-            console.error("PIN migration error:", migrateError)
-          }
-
-          result = legacyResult
-        }
+      if (!response.ok) {
+        setError(result.error ?? "Số điện thoại hoặc mã 4 số không đúng.")
+        setSubmitting(false)
+        return
       }
 
-      if (result.error || !result.data.session) {
-        setError("Số điện thoại hoặc mã 4 số không đúng.")
+      const { error: sessionError } = await createClient().auth.setSession({
+        access_token: result.access_token,
+        refresh_token: result.refresh_token,
+      })
+
+      if (sessionError) {
+        console.error(sessionError)
+        setError("Đăng nhập thành công nhưng không tạo được phiên.")
         setSubmitting(false)
         return
       }
@@ -137,10 +131,7 @@ export default function LoginPage() {
           </label>
 
           {error && (
-            <p
-              className="text-sm text-destructive"
-              role="alert"
-            >
+            <p className="text-sm text-destructive" role="alert">
               {error}
             </p>
           )}
