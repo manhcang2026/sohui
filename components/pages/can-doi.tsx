@@ -5,6 +5,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   CalendarRange,
+  CheckCheck,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -64,6 +65,7 @@ type PaymentRow = {
   direction: "collect" | "pay"
   amount: number
   status: "active" | "cancelled"
+  source_period_id: string | null
   created_at: string
 }
 
@@ -106,6 +108,70 @@ function isCompleted(status: string) {
   return status === "completed" || status === "opened"
 }
 
+function calculatePeriodMemberNets(
+  period: PeriodRow,
+  group: GroupRow,
+  groupShares: ShareRow[],
+  groupPeriods: PeriodRow[],
+) {
+  const previousWinnerIds = new Set(
+    groupPeriods
+      .filter(
+        (item) =>
+          item.period_number < period.period_number &&
+          isCompleted(item.status) &&
+          item.winner_share_id,
+      )
+      .map((item) => item.winner_share_id as string),
+  )
+
+  const contribution = Number(group.contribution_amount || 0)
+  const bid = Number(period.bid_amount || 0)
+  const liveContribution = Math.max(0, contribution - bid)
+  const amountByShare = new Map<string, number>()
+  let potBeforeFee = 0
+
+  for (const share of groupShares) {
+    if (share.id === period.winner_share_id) {
+      amountByShare.set(share.id, 0)
+      continue
+    }
+
+    const amount = previousWinnerIds.has(share.id)
+      ? contribution
+      : liveContribution
+
+    amountByShare.set(share.id, amount)
+    potBeforeFee += amount
+  }
+
+  const winnerShare = groupShares.find(
+    (share) => share.id === period.winner_share_id,
+  )
+  const winnerMemberId = winnerShare?.member_id ?? null
+  const fee = Number(period.fee_amount ?? group.fee_amount ?? 0)
+  const winnerReceive = Math.max(0, potBeforeFee - fee)
+  const memberIds = new Set(groupShares.map((share) => share.member_id))
+  const result = new Map<string, number>()
+
+  for (const memberId of memberIds) {
+    const memberShares = groupShares.filter(
+      (share) => share.member_id === memberId,
+    )
+    let memberPay = 0
+
+    for (const share of memberShares) {
+      if (share.id === period.winner_share_id) continue
+      memberPay += amountByShare.get(share.id) ?? 0
+    }
+
+    const memberReceive = memberId === winnerMemberId ? winnerReceive : 0
+    result.set(memberId, memberPay - memberReceive)
+  }
+
+  return result
+}
+
 export function CanDoiPage() {
   const today = todayInVietnam()
   const [dateFrom, setDateFrom] = useState(firstDayOfMonth(today))
@@ -118,6 +184,7 @@ export function CanDoiPage() {
   const [receiptRows, setReceiptRows] = useState<ReceiptRow[]>([])
   const [payments, setPayments] = useState<PaymentRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [bulkWorkingPeriodId, setBulkWorkingPeriodId] = useState<string | null>(null)
   const [error, setError] = useState("")
 
   const loadData = useCallback(async () => {
@@ -152,7 +219,7 @@ export function CanDoiPage() {
         .select("id, member_id, receipt_date, settlement_amount, status"),
       supabase
         .from("receipt_payments")
-        .select("id, receipt_id, direction, amount, status, created_at"),
+        .select("id, receipt_id, direction, amount, status, source_period_id, created_at"),
     ])
 
     const firstError =
@@ -224,67 +291,23 @@ export function CanDoiPage() {
           share.status === "active" || share.id === period.winner_share_id,
       )
       const groupPeriods = periodsByGroup.get(group.id) ?? []
-      const previousWinnerIds = new Set(
-        groupPeriods
-          .filter(
-            (item) =>
-              item.period_number < period.period_number &&
-              isCompleted(item.status) &&
-              item.winner_share_id,
-          )
-          .map((item) => item.winner_share_id as string),
+      const memberNets = calculatePeriodMemberNets(
+        period,
+        group,
+        groupShares,
+        groupPeriods,
       )
 
-      const contribution = Number(group.contribution_amount || 0)
-      const bid = Number(period.bid_amount || 0)
-      const liveContribution = Math.max(0, contribution - bid)
-      const amountByShare = new Map<string, number>()
-      let potBeforeFee = 0
-
-      for (const share of groupShares) {
-        if (share.id === period.winner_share_id) {
-          amountByShare.set(share.id, 0)
-          continue
-        }
-
-        const amount = previousWinnerIds.has(share.id)
-          ? contribution
-          : liveContribution
-
-        amountByShare.set(share.id, amount)
-        potBeforeFee += amount
-      }
-
-      const winnerShare = groupShares.find(
-        (share) => share.id === period.winner_share_id,
-      )
-      const winnerMemberId = winnerShare?.member_id ?? null
-      const fee = Number(period.fee_amount ?? group.fee_amount ?? 0)
-      const winnerReceive = Math.max(0, potBeforeFee - fee)
-      const memberIds = new Set(groupShares.map((share) => share.member_id))
-
-      for (const memberId of memberIds) {
+      for (const [memberId, net] of memberNets.entries()) {
         if (!membersById.has(memberId)) continue
 
-        const memberShares = groupShares.filter(
-          (share) => share.member_id === memberId,
-        )
-        let memberPay = 0
-
-        for (const share of memberShares) {
-          if (share.id === period.winner_share_id) continue
-          memberPay += amountByShare.get(share.id) ?? 0
-        }
-
-        const memberReceive =
-          memberId === winnerMemberId ? winnerReceive : 0
         const key = `${memberId}|${period.scheduled_date}`
         const current = obligationByMemberDate.get(key)
 
         obligationByMemberDate.set(key, {
           memberId,
           date: period.scheduled_date,
-          net: (current?.net ?? 0) + memberPay - memberReceive,
+          net: (current?.net ?? 0) + net,
         })
       }
     }
@@ -422,6 +445,229 @@ export function CanDoiPage() {
     shares,
   ])
 
+
+  const quickPeriods = useMemo(() => {
+    const groupsById = new Map(groups.map((group) => [group.id, group]))
+    const receiptsById = new Map(receiptRows.map((receipt) => [receipt.id, receipt]))
+    const groupPeriodsMap = new Map<string, PeriodRow[]>()
+    const groupSharesMap = new Map<string, ShareRow[]>()
+
+    for (const period of periods) {
+      const list = groupPeriodsMap.get(period.group_id) ?? []
+      list.push(period)
+      groupPeriodsMap.set(period.group_id, list)
+    }
+
+    for (const share of shares) {
+      const list = groupSharesMap.get(share.group_id) ?? []
+      list.push(share)
+      groupSharesMap.set(share.group_id, list)
+    }
+
+    return periods
+      .filter(
+        (period) =>
+          isCompleted(period.status) &&
+          period.winner_share_id &&
+          period.scheduled_date >= dateFrom &&
+          period.scheduled_date <= dateTo,
+      )
+      .map((period) => {
+        const group = groupsById.get(period.group_id)
+        if (!group) return null
+
+        const groupShares = (groupSharesMap.get(group.id) ?? []).filter(
+          (share) =>
+            share.status === "active" || share.id === period.winner_share_id,
+        )
+        const groupPeriods = groupPeriodsMap.get(group.id) ?? []
+        const memberNets = calculatePeriodMemberNets(
+          period,
+          group,
+          groupShares,
+          groupPeriods,
+        )
+
+        const expected = [...memberNets.entries()].filter(([, net]) => net !== 0)
+        const settled = expected.length > 0 && expected.every(([memberId, net]) => {
+          const receipt = receiptRows.find(
+            (row) =>
+              row.member_id === memberId &&
+              row.receipt_date === period.scheduled_date &&
+              row.status !== "cancelled",
+          )
+          if (!receipt) return false
+
+          const direction = net > 0 ? "collect" : "pay"
+          return payments.some(
+            (payment) =>
+              payment.receipt_id === receipt.id &&
+              payment.source_period_id === period.id &&
+              payment.status === "active" &&
+              payment.direction === direction &&
+              Number(payment.amount) === Math.abs(net),
+          )
+        })
+
+        const winnerShare = groupShares.find(
+          (share) => share.id === period.winner_share_id,
+        )
+        const winner = winnerShare
+          ? members.find((member) => member.id === winnerShare.member_id)
+          : null
+
+        return {
+          period,
+          group,
+          memberNets,
+          settled,
+          winnerName: winner?.full_name ?? "Không rõ",
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (!a || !b) return 0
+        const dateCompare = b.period.scheduled_date.localeCompare(
+          a.period.scheduled_date,
+        )
+        if (dateCompare !== 0) return dateCompare
+        return b.period.period_number - a.period.period_number
+      }) as Array<{
+        period: PeriodRow
+        group: GroupRow
+        memberNets: Map<string, number>
+        settled: boolean
+        winnerName: string
+      }>
+  }, [dateFrom, dateTo, groups, members, payments, periods, receiptRows, shares])
+
+  async function settleWholePeriod(
+    item: (typeof quickPeriods)[number],
+  ) {
+    if (item.settled) return
+
+    const expected = [...item.memberNets.entries()].filter(([, net]) => net !== 0)
+    if (expected.length === 0) {
+      window.alert("Kỳ này không có khoản thu/chi để xác nhận.")
+      return
+    }
+
+    const ok = window.confirm(
+      `Đánh dấu ĐÃ THU/CHI ĐỦ toàn bộ kỳ ${item.period.period_number} của ${item.group.name} ngày ${item.period.scheduled_date}?\n\nThao tác này sẽ ghi nhận đủ tiền cho tất cả hụi viên của riêng kỳ này.`,
+    )
+    if (!ok) return
+
+    setBulkWorkingPeriodId(item.period.id)
+    setError("")
+
+    try {
+      const supabase = createClient()
+
+      for (const [memberId, net] of expected) {
+        const direction = net > 0 ? "collect" : "pay"
+        const amount = Math.abs(net)
+
+        const { data: receipt, error: receiptError } = await supabase
+          .from("hui_receipts")
+          .upsert(
+            {
+              member_id: memberId,
+              receipt_date: item.period.scheduled_date,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "member_id,receipt_date" },
+          )
+          .select("id, status")
+          .single()
+
+        if (receiptError || !receipt) throw receiptError
+
+        if (receipt.status === "cancelled") {
+          const { error: reopenError } = await supabase
+            .from("hui_receipts")
+            .update({
+              status: "open",
+              cancelled_at: null,
+              cancel_reason: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", receipt.id)
+
+          if (reopenError) throw reopenError
+        }
+
+        const { data: oldPayments, error: oldPaymentsError } = await supabase
+          .from("receipt_payments")
+          .select("id, direction, amount, status")
+          .eq("receipt_id", receipt.id)
+          .eq("source_period_id", item.period.id)
+          .eq("status", "active")
+
+        if (oldPaymentsError) throw oldPaymentsError
+
+        const exact = (oldPayments ?? []).find(
+          (payment) =>
+            payment.direction === direction &&
+            Number(payment.amount) === amount,
+        )
+
+        if (exact && (oldPayments ?? []).length === 1) {
+          continue
+        }
+
+        if ((oldPayments ?? []).length > 0) {
+          const ids = (oldPayments ?? []).map((payment) => payment.id)
+          const { error: cancelOldError } = await supabase
+            .from("receipt_payments")
+            .update({
+              status: "cancelled",
+              cancelled_at: new Date().toISOString(),
+              cancel_reason: "Cập nhật lại dữ liệu chốt nhanh của kỳ",
+              updated_at: new Date().toISOString(),
+            })
+            .in("id", ids)
+
+          if (cancelOldError) throw cancelOldError
+        }
+
+        const { error: paymentError } = await supabase
+          .from("receipt_payments")
+          .insert({
+            receipt_id: receipt.id,
+            direction,
+            amount,
+            method: "other",
+            note: `Dữ liệu cũ - xác nhận đủ kỳ ${item.period.period_number} - ${item.group.name}`,
+            source_period_id: item.period.id,
+          })
+
+        if (paymentError) throw paymentError
+      }
+
+      await supabase.from("audit_logs").insert({
+        entity_type: "hui_period",
+        entity_id: item.period.id,
+        action: "bulk_settle_period",
+        after_data: {
+          group_id: item.group.id,
+          period_number: item.period.period_number,
+          scheduled_date: item.period.scheduled_date,
+          member_count: expected.length,
+        },
+        reason: "Đánh dấu dữ liệu cũ đã thu/chi đủ theo kỳ",
+      })
+
+      await loadData()
+    } catch (caught) {
+      console.error(caught)
+      setError(
+        "Không thể đánh dấu kỳ đã thu/chi đủ. Kiểm tra bạn đã chạy SQL bổ sung source_period_id.",
+      )
+    } finally {
+      setBulkWorkingPeriodId(null)
+    }
+  }
+
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("vi")
     if (!normalized) return balances
@@ -517,6 +763,71 @@ export function CanDoiPage() {
             Làm mới
           </Button>
         </div>
+      </Card>
+
+
+      <Card className="p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <CheckCheck className="size-5" />
+              <h2 className="font-bold">Chốt nhanh dữ liệu cũ theo kỳ</h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Dùng cho các kỳ cũ mà bạn chắc chắn đã thu đủ và chi đủ.
+              Mỗi kỳ chỉ được ghi nhận một lần.
+            </p>
+          </div>
+        </div>
+
+        {quickPeriods.length === 0 ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            Không có kỳ đã chốt trong khoảng ngày đang chọn.
+          </p>
+        ) : (
+          <div className="mt-4 space-y-2">
+            {quickPeriods.map((item) => (
+              <div
+                key={item.period.id}
+                className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <p className="font-semibold">
+                    {item.group.name} · Kỳ {item.period.period_number}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {item.period.scheduled_date} · Hốt: {item.winnerName} ·
+                    Giá thăm {formatVND(item.period.bid_amount)}
+                  </p>
+                </div>
+
+                <Button
+                  size="sm"
+                  variant={item.settled ? "outline" : "default"}
+                  disabled={
+                    item.settled ||
+                    bulkWorkingPeriodId === item.period.id
+                  }
+                  onClick={() => void settleWholePeriod(item)}
+                  className="shrink-0"
+                >
+                  {bulkWorkingPeriodId === item.period.id ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <CheckCheck className="size-4" />
+                  )}
+                  {item.settled ? "Kỳ đã thu/chi đủ" : "Đã thu/chi đủ kỳ"}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          Nút này ghi nhận cả phía thu và phía chi của riêng kỳ được chọn.
+          Chủ hụi/admin nếu có chân trong dây vẫn được tính như hụi viên bình thường.
+          Không dùng nút này cho kỳ còn nợ hoặc còn thiếu tiền.
+        </p>
       </Card>
 
       <div className="grid gap-3 md:grid-cols-2">
