@@ -1,0 +1,725 @@
+"use client"
+
+import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  CalendarRange,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  Users,
+  WalletCards,
+} from "lucide-react"
+import { createClient } from "@/lib/supabase/client"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+
+type GroupRow = {
+  id: string
+  code: string | null
+  name: string
+  contribution_amount: number
+  total_shares: number
+  fee_amount: number
+}
+
+type ShareRow = {
+  id: string
+  group_id: string
+  member_id: string
+  share_number: number
+  status: string
+}
+
+type PeriodRow = {
+  id: string
+  group_id: string
+  period_number: number
+  scheduled_date: string
+  winner_share_id: string | null
+  bid_amount: number
+  fee_amount: number
+  status: string
+}
+
+type MemberRow = {
+  id: string
+  full_name: string
+  phone: string | null
+}
+
+type ReceiptRow = {
+  id: string
+  member_id: string
+  receipt_date: string
+  settlement_amount: number
+  status: string
+}
+
+type PaymentRow = {
+  id: string
+  receipt_id: string
+  direction: "collect" | "pay"
+  amount: number
+  status: "active" | "cancelled"
+  created_at: string
+}
+
+type MemberBalance = {
+  member: MemberRow
+  shouldCollect: number
+  collected: number
+  remainCollect: number
+  shouldPay: number
+  paid: number
+  remainPay: number
+  actualNet: number
+  pendingNet: number
+  receiptCount: number
+}
+
+function todayInVietnam() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date())
+}
+
+function firstDayOfMonth(dateText: string) {
+  const [year, month] = dateText.split("-")
+  return `${year}-${month}-01`
+}
+
+function formatVND(value: number) {
+  return new Intl.NumberFormat("vi-VN", {
+    style: "currency",
+    currency: "VND",
+    maximumFractionDigits: 0,
+  }).format(Number(value || 0))
+}
+
+function isCompleted(status: string) {
+  return status === "completed" || status === "opened"
+}
+
+export function CanDoiPage() {
+  const today = todayInVietnam()
+  const [dateFrom, setDateFrom] = useState(firstDayOfMonth(today))
+  const [dateTo, setDateTo] = useState(today)
+  const [query, setQuery] = useState("")
+  const [groups, setGroups] = useState<GroupRow[]>([])
+  const [shares, setShares] = useState<ShareRow[]>([])
+  const [periods, setPeriods] = useState<PeriodRow[]>([])
+  const [members, setMembers] = useState<MemberRow[]>([])
+  const [receiptRows, setReceiptRows] = useState<ReceiptRow[]>([])
+  const [payments, setPayments] = useState<PaymentRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setError("")
+
+    const supabase = createClient()
+    const [
+      groupsResult,
+      sharesResult,
+      periodsResult,
+      membersResult,
+      receiptsResult,
+      paymentsResult,
+    ] = await Promise.all([
+      supabase
+        .from("hui_groups")
+        .select("id, code, name, contribution_amount, total_shares, fee_amount"),
+      supabase
+        .from("hui_shares")
+        .select("id, group_id, member_id, share_number, status")
+        .order("share_number"),
+      supabase
+        .from("hui_periods")
+        .select(
+          "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, fee_amount, status",
+        )
+        .order("period_number"),
+      supabase.from("members").select("id, full_name, phone"),
+      supabase
+        .from("hui_receipts")
+        .select("id, member_id, receipt_date, settlement_amount, status"),
+      supabase
+        .from("receipt_payments")
+        .select("id, receipt_id, direction, amount, status, created_at"),
+    ])
+
+    const firstError =
+      groupsResult.error ??
+      sharesResult.error ??
+      periodsResult.error ??
+      membersResult.error ??
+      receiptsResult.error ??
+      paymentsResult.error
+
+    if (firstError) {
+      console.error(firstError)
+      setError(
+        "Không thể tải bảng cân đối. Hãy kiểm tra bạn đã chạy SQL tạo bảng phiếu/thanh toán.",
+      )
+      setLoading(false)
+      return
+    }
+
+    setGroups((groupsResult.data ?? []) as GroupRow[])
+    setShares((sharesResult.data ?? []) as ShareRow[])
+    setPeriods((periodsResult.data ?? []) as PeriodRow[])
+    setMembers((membersResult.data ?? []) as MemberRow[])
+    setReceiptRows((receiptsResult.data ?? []) as ReceiptRow[])
+    setPayments((paymentsResult.data ?? []) as PaymentRow[])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    void loadData()
+  }, [loadData])
+
+  const balances = useMemo(() => {
+    const groupsById = new Map(groups.map((group) => [group.id, group]))
+    const membersById = new Map(members.map((member) => [member.id, member]))
+    const sharesByGroup = new Map<string, ShareRow[]>()
+    const periodsByGroup = new Map<string, PeriodRow[]>()
+
+    for (const share of shares) {
+      const list = sharesByGroup.get(share.group_id) ?? []
+      list.push(share)
+      sharesByGroup.set(share.group_id, list)
+    }
+
+    for (const period of periods) {
+      const list = periodsByGroup.get(period.group_id) ?? []
+      list.push(period)
+      periodsByGroup.set(period.group_id, list)
+    }
+
+    const obligationByMemberDate = new Map<
+      string,
+      { memberId: string; date: string; net: number }
+    >()
+
+    const rangePeriods = periods.filter(
+      (period) =>
+        isCompleted(period.status) &&
+        period.scheduled_date >= dateFrom &&
+        period.scheduled_date <= dateTo,
+    )
+
+    for (const period of rangePeriods) {
+      const group = groupsById.get(period.group_id)
+      if (!group || !period.winner_share_id) continue
+
+      const groupShares = (sharesByGroup.get(group.id) ?? []).filter(
+        (share) =>
+          share.status === "active" || share.id === period.winner_share_id,
+      )
+      const groupPeriods = periodsByGroup.get(group.id) ?? []
+      const previousWinnerIds = new Set(
+        groupPeriods
+          .filter(
+            (item) =>
+              item.period_number < period.period_number &&
+              isCompleted(item.status) &&
+              item.winner_share_id,
+          )
+          .map((item) => item.winner_share_id as string),
+      )
+
+      const contribution = Number(group.contribution_amount || 0)
+      const bid = Number(period.bid_amount || 0)
+      const liveContribution = Math.max(0, contribution - bid)
+      const amountByShare = new Map<string, number>()
+      let potBeforeFee = 0
+
+      for (const share of groupShares) {
+        if (share.id === period.winner_share_id) {
+          amountByShare.set(share.id, 0)
+          continue
+        }
+
+        const amount = previousWinnerIds.has(share.id)
+          ? contribution
+          : liveContribution
+
+        amountByShare.set(share.id, amount)
+        potBeforeFee += amount
+      }
+
+      const winnerShare = groupShares.find(
+        (share) => share.id === period.winner_share_id,
+      )
+      const winnerMemberId = winnerShare?.member_id ?? null
+      const fee = Number(period.fee_amount ?? group.fee_amount ?? 0)
+      const winnerReceive = Math.max(0, potBeforeFee - fee)
+      const memberIds = new Set(groupShares.map((share) => share.member_id))
+
+      for (const memberId of memberIds) {
+        if (!membersById.has(memberId)) continue
+
+        const memberShares = groupShares.filter(
+          (share) => share.member_id === memberId,
+        )
+        let memberPay = 0
+
+        for (const share of memberShares) {
+          if (share.id === period.winner_share_id) continue
+          memberPay += amountByShare.get(share.id) ?? 0
+        }
+
+        const memberReceive =
+          memberId === winnerMemberId ? winnerReceive : 0
+        const key = `${memberId}|${period.scheduled_date}`
+        const current = obligationByMemberDate.get(key)
+
+        obligationByMemberDate.set(key, {
+          memberId,
+          date: period.scheduled_date,
+          net: (current?.net ?? 0) + memberPay - memberReceive,
+        })
+      }
+    }
+
+    // Các điều chỉnh/tất toán đã lưu trên phiếu được cộng vào nghĩa vụ của đúng ngày.
+    for (const receipt of receiptRows) {
+      if (
+        receipt.status === "cancelled" ||
+        receipt.receipt_date < dateFrom ||
+        receipt.receipt_date > dateTo
+      ) {
+        continue
+      }
+
+      const settlement = Number(receipt.settlement_amount || 0)
+      if (!settlement) continue
+
+      const key = `${receipt.member_id}|${receipt.receipt_date}`
+      const current = obligationByMemberDate.get(key)
+
+      obligationByMemberDate.set(key, {
+        memberId: receipt.member_id,
+        date: receipt.receipt_date,
+        net: (current?.net ?? 0) + settlement,
+      })
+    }
+
+    const receiptsInRange = receiptRows.filter(
+      (receipt) =>
+        receipt.status !== "cancelled" &&
+        receipt.receipt_date >= dateFrom &&
+        receipt.receipt_date <= dateTo,
+    )
+    const receiptById = new Map(
+      receiptsInRange.map((receipt) => [receipt.id, receipt]),
+    )
+    const paymentTotals = new Map<
+      string,
+      { collected: number; paid: number }
+    >()
+
+    for (const payment of payments) {
+      if (payment.status !== "active") continue
+      const receipt = receiptById.get(payment.receipt_id)
+      if (!receipt) continue
+
+      const current = paymentTotals.get(receipt.member_id) ?? {
+        collected: 0,
+        paid: 0,
+      }
+
+      if (payment.direction === "collect") {
+        current.collected += Number(payment.amount || 0)
+      } else {
+        current.paid += Number(payment.amount || 0)
+      }
+
+      paymentTotals.set(receipt.member_id, current)
+    }
+
+    const obligationsByMember = new Map<
+      string,
+      { shouldCollect: number; shouldPay: number; receiptCount: number }
+    >()
+
+    for (const item of obligationByMemberDate.values()) {
+      const current = obligationsByMember.get(item.memberId) ?? {
+        shouldCollect: 0,
+        shouldPay: 0,
+        receiptCount: 0,
+      }
+
+      if (item.net > 0) current.shouldCollect += item.net
+      if (item.net < 0) current.shouldPay += Math.abs(item.net)
+      current.receiptCount += 1
+
+      obligationsByMember.set(item.memberId, current)
+    }
+
+    const memberIds = new Set([
+      ...obligationsByMember.keys(),
+      ...paymentTotals.keys(),
+    ])
+
+    const result: MemberBalance[] = []
+
+    for (const memberId of memberIds) {
+      const member = membersById.get(memberId)
+      if (!member) continue
+
+      const obligation = obligationsByMember.get(memberId) ?? {
+        shouldCollect: 0,
+        shouldPay: 0,
+        receiptCount: 0,
+      }
+      const actual = paymentTotals.get(memberId) ?? {
+        collected: 0,
+        paid: 0,
+      }
+
+      const remainCollect = Math.max(
+        0,
+        obligation.shouldCollect - actual.collected,
+      )
+      const remainPay = Math.max(0, obligation.shouldPay - actual.paid)
+
+      result.push({
+        member,
+        shouldCollect: obligation.shouldCollect,
+        collected: actual.collected,
+        remainCollect,
+        shouldPay: obligation.shouldPay,
+        paid: actual.paid,
+        remainPay,
+        actualNet: actual.collected - actual.paid,
+        pendingNet: remainCollect - remainPay,
+        receiptCount: obligation.receiptCount,
+      })
+    }
+
+    return result.sort((a, b) => {
+      const aPending = a.remainCollect + a.remainPay
+      const bPending = b.remainCollect + b.remainPay
+      if (aPending !== bPending) return bPending - aPending
+      return a.member.full_name.localeCompare(b.member.full_name, "vi")
+    })
+  }, [
+    dateFrom,
+    dateTo,
+    groups,
+    members,
+    payments,
+    periods,
+    receiptRows,
+    shares,
+  ])
+
+  const filtered = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("vi")
+    if (!normalized) return balances
+
+    return balances.filter((item) => {
+      return (
+        item.member.full_name.toLocaleLowerCase("vi").includes(normalized) ||
+        (item.member.phone ?? "").includes(normalized)
+      )
+    })
+  }, [balances, query])
+
+  const totals = useMemo(
+    () =>
+      balances.reduce(
+        (sum, item) => ({
+          shouldCollect: sum.shouldCollect + item.shouldCollect,
+          collected: sum.collected + item.collected,
+          remainCollect: sum.remainCollect + item.remainCollect,
+          shouldPay: sum.shouldPay + item.shouldPay,
+          paid: sum.paid + item.paid,
+          remainPay: sum.remainPay + item.remainPay,
+        }),
+        {
+          shouldCollect: 0,
+          collected: 0,
+          remainCollect: 0,
+          shouldPay: 0,
+          paid: 0,
+          remainPay: 0,
+        },
+      ),
+    [balances],
+  )
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" />
+        Đang tính bảng cân đối...
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-4xl p-4 md:p-6">
+        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+          <p className="font-medium text-destructive">{error}</p>
+          <Button variant="outline" onClick={() => void loadData()}>
+            <RefreshCw className="size-4" />
+            Thử lại
+          </Button>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4 p-4 md:p-6">
+      <div>
+        <div className="flex items-center gap-2">
+          <WalletCards className="size-5" />
+          <h1 className="text-xl font-bold">Cân đối tiền hụi</h1>
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          So sánh tiền phải thu/chi theo kỳ hụi với tiền đã xác nhận thực tế.
+        </p>
+      </div>
+
+      <Card className="p-4">
+        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Từ ngày
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(event) => setDateFrom(event.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Đến ngày
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(event) => setDateTo(event.target.value)}
+            />
+          </label>
+
+          <Button variant="outline" onClick={() => void loadData()}>
+            <RefreshCw className="size-4" />
+            Làm mới
+          </Button>
+        </div>
+      </Card>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <Card className="p-4">
+          <div className="flex items-center gap-2">
+            <ArrowDownLeft className="size-5" />
+            <h2 className="font-bold">Tiền phải thu</h2>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <Metric
+              label="Phải thu"
+              value={formatVND(totals.shouldCollect)}
+            />
+            <Metric label="Đã thu" value={formatVND(totals.collected)} />
+            <Metric
+              label="Còn thu"
+              value={formatVND(totals.remainCollect)}
+              emphasize
+            />
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-2">
+            <ArrowUpRight className="size-5" />
+            <h2 className="font-bold">Tiền phải chi</h2>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <Metric label="Phải chi" value={formatVND(totals.shouldPay)} />
+            <Metric label="Đã chi" value={formatVND(totals.paid)} />
+            <Metric
+              label="Còn chi"
+              value={formatVND(totals.remainPay)}
+              emphasize
+            />
+          </div>
+        </Card>
+      </div>
+
+      <Card className="p-4">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Metric
+            label="Tiền thực tế đang giữ"
+            value={formatVND(totals.collected - totals.paid)}
+            emphasize
+          />
+          <Metric
+            label="Còn phải thu ròng"
+            value={formatVND(
+              Math.max(0, totals.remainCollect - totals.remainPay),
+            )}
+          />
+          <Metric
+            label="Còn phải chi ròng"
+            value={formatVND(
+              Math.max(0, totals.remainPay - totals.remainCollect),
+            )}
+          />
+        </div>
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          “Tiền thực tế đang giữ” ở đây chỉ tính các giao dịch đã bấm xác nhận
+          thu/chi trong app. Nó chưa bao gồm tiền ngoài hệ thống hoặc số dư tiền
+          mặt đầu kỳ.
+        </p>
+      </Card>
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Users className="size-4" />
+            <p className="font-semibold">Theo hụi viên</p>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {balances.length} người có phát sinh trong khoảng ngày
+          </p>
+        </div>
+
+        <div className="relative w-full sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Tìm tên hoặc SĐT..."
+          />
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <Card className="flex flex-col items-center gap-3 p-10 text-center">
+          <CalendarRange className="size-8 text-muted-foreground" />
+          <div>
+            <p className="font-medium">Không có phát sinh</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Thử chọn khoảng ngày khác hoặc kiểm tra các kỳ hụi đã chốt.
+            </p>
+          </div>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map((item) => (
+            <Card key={item.member.id} className="p-4">
+              <div className="flex flex-col gap-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold">{item.member.full_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {item.member.phone || "Chưa có SĐT"} ·{" "}
+                      {item.receiptCount} ngày có phát sinh
+                    </p>
+                  </div>
+
+                  <BalanceBadge item={item} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                  <Metric
+                    label="Phải thu"
+                    value={formatVND(item.shouldCollect)}
+                  />
+                  <Metric label="Đã thu" value={formatVND(item.collected)} />
+                  <Metric
+                    label="Còn thu"
+                    value={formatVND(item.remainCollect)}
+                    emphasize={item.remainCollect > 0}
+                  />
+                  <Metric
+                    label="Phải chi"
+                    value={formatVND(item.shouldPay)}
+                  />
+                  <Metric label="Đã chi" value={formatVND(item.paid)} />
+                  <Metric
+                    label="Còn chi"
+                    value={formatVND(item.remainPay)}
+                    emphasize={item.remainPay > 0}
+                  />
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Card className="p-4 text-xs leading-relaxed text-muted-foreground">
+        Quy tắc của bảng này không phân biệt quyền tài khoản. Nếu Thảo Phan,
+        Tâm hoặc bất kỳ admin nào có chân trong dây hụi, các chân đó được tính
+        thu/chi giống hệt mọi hụi viên khác.
+      </Card>
+    </div>
+  )
+}
+
+function Metric({
+  label,
+  value,
+  emphasize = false,
+}: {
+  label: string
+  value: string
+  emphasize?: boolean
+}) {
+  return (
+    <div className="min-w-0 rounded-md bg-muted/50 p-2.5">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p
+        className={`mt-1 break-words text-sm ${
+          emphasize ? "font-bold" : "font-semibold"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function BalanceBadge({ item }: { item: MemberBalance }) {
+  if (item.remainCollect > 0 && item.remainPay === 0) {
+    return (
+      <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
+        Còn thu {formatVND(item.remainCollect)}
+      </span>
+    )
+  }
+
+  if (item.remainPay > 0 && item.remainCollect === 0) {
+    return (
+      <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
+        Còn chi {formatVND(item.remainPay)}
+      </span>
+    )
+  }
+
+  if (item.remainCollect === 0 && item.remainPay === 0) {
+    return (
+      <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
+        Đã cân
+      </span>
+    )
+  }
+
+  return (
+    <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
+      Có thu & chi
+    </span>
+  )
+}
