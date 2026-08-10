@@ -632,7 +632,7 @@ export function HuiVienPage() {
           role="status"
         >
           <LoaderCircle className="size-5 animate-spin" />
-          Đang tải hồ sơ hụi viên...
+          Đang tải hụi viên...
         </div>
       ) : filteredProfiles.length === 0 ? (
         <Card className="flex flex-col items-center gap-2 p-10 text-center">
@@ -640,75 +640,192 @@ export function HuiVienPage() {
           <p className="font-medium">
             {query ? "Không tìm thấy hụi viên" : "Chưa có hụi viên"}
           </p>
+          <p className="text-sm text-muted-foreground">
+            {query
+              ? "Thử tìm bằng tên hoặc số điện thoại khác."
+              : "Thêm hụi viên đầu tiên để bắt đầu."}
+          </p>
         </Card>
       ) : (
-        <div className="space-y-2">
-          {filteredProfiles.map((profile) => {
-            const meta = riskMeta(profile.risk)
-            return (
-              <Card
-                key={profile.member.id}
-                className="cursor-pointer p-4 transition-shadow hover:shadow-md"
-                onClick={() => setSelectedMemberId(profile.member.id)}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                    <UserRound className="size-4" />
-                  </div>
+        <>
+          <Card className="hidden overflow-hidden md:block">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr>
+                  {[
+                    "Họ tên",
+                    "Điện thoại",
+                    "Số Zalo",
+                    "Ngân hàng",
+                    "Đánh giá",
+                    "Trạng thái",
+                    "Thao tác",
+                  ].map((heading) => (
+                    <th
+                      key={heading}
+                      className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <p className="font-semibold">
-                          {profile.member.full_name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {profile.member.phone || "Chưa có SĐT"} ·{" "}
-                          {profile.groupCount} dây · {profile.totalShares} chân
-                        </p>
-                      </div>
+              <tbody className="divide-y divide-border">
+                {filteredProfiles.map((profile) => {
+                  const member = profile.member
+                  const meta = riskMeta(profile.risk)
 
-                      <div className="flex items-center gap-2">
+                  return (
+                    <tr
+                      key={member.id}
+                      className="cursor-pointer hover:bg-muted/30"
+                      onClick={() => setSelectedMemberId(member.id)}
+                    >
+                      <td className="px-4 py-3">
+                        <button
+                          className="text-left font-medium hover:underline"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedMemberId(member.id)
+                          }}
+                        >
+                          {member.full_name}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {member.phone || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {member.zalo_phone || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {member.bank_name || "—"}
+                      </td>
+                      <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
                         >
                           <meta.Icon className="size-3.5" />
                           {meta.label}
                         </span>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </div>
-                    </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void toggleActive(member)
+                          }}
+                          className={
+                            member.is_active
+                              ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
+                              : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
+                          }
+                        >
+                          {member.is_active ? "Hoạt động" : "Tạm ngưng"}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setSelectedMemberId(member.id)
+                            }}
+                          >
+                            <WalletCards className="size-4" />
+                            Tiền bạc
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setEditing(member)
+                            }}
+                          >
+                            <Pencil className="size-4" />
+                            Sửa
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </Card>
 
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      <SmallStat
-                        label="Sống / chết"
-                        value={`${profile.liveShares} / ${profile.deadShares}`}
-                      />
-                      <SmallStat
-                        label="Đã đóng"
-                        value={formatVND(profile.totalContributed)}
-                      />
-                      <SmallStat
-                        label="Đã nhận"
-                        value={formatVND(profile.totalReceived)}
-                      />
-                      <SmallStat
-                        label="Còn nghĩa vụ sau hốt"
-                        value={formatVND(profile.futureObligation)}
-                      />
-                    </div>
+          <div className="flex flex-col gap-2 md:hidden">
+            {filteredProfiles.map((profile) => {
+              const member = profile.member
+              const meta = riskMeta(profile.risk)
 
-                    {profile.overdue > 0 && (
-                      <p className="mt-2 text-xs font-medium text-destructive">
-                        Đang thiếu đến hạn: {formatVND(profile.overdue)}
+              return (
+                <Card
+                  key={member.id}
+                  className="cursor-pointer p-4"
+                  onClick={() => setSelectedMemberId(member.id)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold">
+                        {member.full_name}
                       </p>
-                    )}
+                      <p className="text-sm text-muted-foreground">
+                        {member.phone || "Chưa có SĐT"}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Zalo: {member.zalo_phone || "—"} ·{" "}
+                        {member.bank_name || "Chưa có ngân hàng"}
+                      </p>
+                    </div>
+
+                    <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
                   </div>
-                </div>
-              </Card>
-            )
-          })}
-        </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
+                    >
+                      <meta.Icon className="size-3.5" />
+                      {meta.label}
+                    </span>
+
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void toggleActive(member)
+                      }}
+                      className={
+                        member.is_active
+                          ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
+                          : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
+                      }
+                    >
+                      {member.is_active ? "Hoạt động" : "Tạm ngưng"}
+                    </button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="ml-auto"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setEditing(member)
+                      }}
+                    >
+                      <Pencil className="size-4" />
+                      Sửa
+                    </Button>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        </>
       )}
 
       {editing !== undefined && (
