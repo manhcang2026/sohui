@@ -183,9 +183,9 @@ function calculatePeriodMemberNets(
   )
   const winnerMemberId = winnerShare?.member_id ?? null
   const fee = Number(period.fee_amount || 0)
-  // potBeforeFee - fee = tiền hốt trước tiền thảo.
-  const huiAmount = Math.max(0, potBeforeFee - fee)
-  // Số thực nhận của người hốt = tiền hốt - tiền thảo.
+  // Tổng hốt hụi là toàn bộ tiền đóng của các chân còn lại.
+  const huiAmount = Math.max(0, potBeforeFee)
+  // Số thực nhận của người hốt = tổng hốt hụi - tiền thảo.
   const winnerReceive = Math.max(0, huiAmount - fee)
   const result = new Map<string, number>()
 
