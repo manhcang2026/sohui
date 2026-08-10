@@ -13,46 +13,72 @@ import {
   normalizeVietnamPhone,
 } from "@/lib/auth/passcode"
 
+function looksLikeEmail(value: string) {
+  return value.includes("@")
+}
+
 export default function LoginPage() {
   const router = useRouter()
-  const [phone, setPhone] = useState("")
-  const [pin, setPin] = useState("")
+  const [account, setAccount] = useState("")
+  const [secret, setSecret] = useState("")
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError("")
-
-    if (!isFourDigitPin(pin)) {
-      setError("Mã đăng nhập phải gồm đúng 4 số.")
-      return
-    }
-
     setSubmitting(true)
 
     try {
-      const normalizedPhone = normalizeVietnamPhone(phone)
+      const supabase = createClient()
+      const loginValue = account.trim()
 
-      const { error: authError } =
-        await createClient().auth.signInWithPassword({
-          phone: normalizedPhone,
-          password: authPasswordFromPin(pin),
+      if (looksLikeEmail(loginValue)) {
+        // CỨU HỘ: tài khoản cũ vẫn login bằng email + password cũ.
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          email: loginValue.toLowerCase(),
+          password: secret,
         })
 
-      if (authError) {
-        setError("Số điện thoại hoặc mã 4 số không đúng.")
-        setSubmitting(false)
-        return
+        if (authError) {
+          setError("Email hoặc mật khẩu cũ không đúng.")
+          setSubmitting(false)
+          return
+        }
+      } else {
+        // Login mới: SĐT + PIN 4 số.
+        if (!isFourDigitPin(secret)) {
+          setError("Mã đăng nhập phải gồm đúng 4 số.")
+          setSubmitting(false)
+          return
+        }
+
+        const phone = normalizeVietnamPhone(loginValue)
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          phone,
+          password: authPasswordFromPin(secret),
+        })
+
+        if (authError) {
+          setError("Số điện thoại hoặc mã 4 số không đúng.")
+          setSubmitting(false)
+          return
+        }
       }
 
       router.replace("/")
       router.refresh()
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Số điện thoại không hợp lệ.")
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Không thể đăng nhập.",
+      )
       setSubmitting(false)
     }
   }
+
+  const emailMode = looksLikeEmail(account)
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -63,38 +89,47 @@ export default function LoginPage() {
           </div>
           <h1 className="text-xl font-bold">Đăng nhập Sổ Hụi</h1>
           <p className="text-sm text-muted-foreground">
-            Nhập số điện thoại và mã 4 số.
+            SĐT + mã 4 số. Tài khoản cũ có thể dùng email để chuyển đổi.
           </p>
         </div>
 
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Số điện thoại
+            Số điện thoại / Email cũ
             <Input
-              inputMode="tel"
-              autoComplete="tel"
+              autoComplete="username"
               required
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="09xxxxxxxx"
+              value={account}
+              onChange={(event) => setAccount(event.target.value)}
+              placeholder="09xxxxxxxx hoặc email cũ"
             />
           </label>
 
           <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Mã 4 số
+            {emailMode ? "Mật khẩu cũ" : "Mã 4 số"}
             <Input
               type="password"
-              inputMode="numeric"
+              inputMode={emailMode ? "text" : "numeric"}
               autoComplete="current-password"
-              maxLength={4}
               required
-              value={pin}
+              value={secret}
               onChange={(event) =>
-                setPin(event.target.value.replace(/\D/g, "").slice(0, 4))
+                setSecret(
+                  emailMode
+                    ? event.target.value
+                    : event.target.value.replace(/\D/g, "").slice(0, 4),
+                )
               }
-              placeholder="0000"
+              placeholder={emailMode ? "Mật khẩu Supabase cũ" : "0000"}
             />
           </label>
+
+          {emailMode && (
+            <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-900">
+              Chế độ cứu hộ: đăng nhập bằng email + mật khẩu cũ, sau đó vào
+              Cài đặt để chuyển tài khoản sang SĐT.
+            </p>
+          )}
 
           {error && (
             <p className="text-sm text-destructive" role="alert">
