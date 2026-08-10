@@ -29,10 +29,52 @@ function receiptStatusLabel(status: Receipt["status"]) { return status === "canc
 function paymentMethodLabel(method: PaymentRow["method"]) { return method === "cash" ? "Tiền mặt" : method === "transfer" ? "Chuyển khoản" : "Khác" }
 function parseAmount(value: string) { const clean = value.replace(/\./g, "").replace(/,/g, "").trim(); const n = Number(clean); return Number.isFinite(n) ? n : 0 }
 
-function transferText(settings: SettingsRow, receipt: Receipt, date: string) {
-  const name = receipt.member.full_name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").replace(/[^a-zA-Z0-9 ]/g, "").trim().replace(/\s+/g, " ").slice(0, 20)
-  return `${settings.transfer_prefix || "HUI"} ${name} ${date.replaceAll("-", "")}`.slice(0, 50)
+function transferText(
+  settings: SettingsRow,
+  receipt: Receipt,
+  date: string,
+) {
+  const honorifics = new Set([
+    "anh",
+    "chi",
+    "co",
+    "di",
+    "chu",
+    "bac",
+    "ong",
+    "ba",
+    "em",
+    "thay",
+    "cau",
+    "mo",
+  ])
+
+  const asciiName = receipt.member.full_name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .replace(/[^a-zA-Z0-9 ]/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+
+  const parts = asciiName.split(" ").filter(Boolean)
+
+  while (
+    parts.length > 1 &&
+    honorifics.has(parts[0].toLocaleLowerCase("vi"))
+  ) {
+    parts.shift()
+  }
+
+  const cleanName = parts.join(" ").slice(0, 24)
+
+  const [year, month, day] = date.slice(0, 10).split("-")
+  const ddmmyy = `${day}${month}${year.slice(-2)}`
+
+  return `${cleanName} ck ngay ${ddmmyy}`.trim().slice(0, 50)
 }
+
 function vietQrUrl(settings: SettingsRow, receipt: Receipt, date: string) {
   if (receipt.direction !== "collect" || receipt.remainingAmount <= 0 || !settings.bank_id || !settings.bank_account_number) return ""
   const q = new URLSearchParams({ amount: String(Math.round(receipt.remainingAmount)), addInfo: transferText(settings, receipt, date), accountName: settings.bank_account_name })
