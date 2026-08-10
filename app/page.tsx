@@ -7,10 +7,12 @@ import { KhuiHomNayPage } from "@/components/pages/khui-hom-nay"
 import { DayHuiPage } from "@/components/pages/day-hui"
 import { HuiVienPage } from "@/components/pages/hui-vien"
 import { PhieuThuChiPage } from "@/components/pages/phieu-thu-chi"
+import { CanDoiPage } from "@/components/pages/can-doi"
 import { CaiDatPage } from "@/components/pages/cai-dat"
 
 export default function Home() {
   const [page, setPage] = useState<Page>("tongguan")
+
   return (
     <AppShell page={page} onNavigate={setPage}>
       {page === "tongguan" && <TongQuanPage onNavigate={setPage} />}
@@ -18,6 +20,7 @@ export default function Home() {
       {page === "day" && <DayHuiPage />}
       {page === "huivien" && <HuiVienPage />}
       {page === "phieu" && <PhieuThuChiPage />}
+      {page === "candoi" && <CanDoiPage />}
       {page === "caidat" && <CaiDatPage />}
     </AppShell>
   )
