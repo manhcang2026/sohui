@@ -685,39 +685,51 @@ export function CanDoiPage() {
         const group = groupsById.get(period.group_id)
         const fee = Number(period.fee_amount ?? group?.fee_amount ?? 0)
 
-        const relatedPayments = payments.filter(
-          (payment) =>
-            payment.source_period_id === period.id &&
-            payment.status === "active",
-        )
-
-        const isFullyRecorded =
-          relatedPayments.length > 0 &&
-          relatedPayments.some((payment) => payment.direction === "pay")
-
         return {
           period,
+          groupId: period.group_id,
           groupName: group?.name ?? "Không rõ dây",
           fee,
-          isFullyRecorded,
         }
       })
       .sort((a, b) => {
-        const byDate = b.period.scheduled_date.localeCompare(
-          a.period.scheduled_date,
+        const byDate = a.period.scheduled_date.localeCompare(
+          b.period.scheduled_date,
         )
         if (byDate !== 0) return byDate
-        return b.period.period_number - a.period.period_number
+        return a.period.period_number - b.period.period_number
       })
 
-    return {
-      items,
-      totalFee: items.reduce((sum, item) => sum + item.fee, 0),
-      recordedFee: items
-        .filter((item) => item.isFullyRecorded)
-        .reduce((sum, item) => sum + item.fee, 0),
+    let cumulativeFee = 0
+    const itemsWithCumulative = items.map((item) => {
+      cumulativeFee += item.fee
+      return { ...item, cumulativeFee }
+    })
+
+    const groupMap = new Map<
+      string,
+      { groupName: string; periodCount: number; totalFee: number }
+    >()
+
+    for (const item of items) {
+      const current = groupMap.get(item.groupId) ?? {
+        groupName: item.groupName,
+        periodCount: 0,
+        totalFee: 0,
+      }
+      current.periodCount += 1
+      current.totalFee += item.fee
+      groupMap.set(item.groupId, current)
     }
-  }, [dateFrom, dateTo, groups, payments, periods])
+
+    return {
+      items: [...itemsWithCumulative].reverse(),
+      totalFee: items.reduce((sum, item) => sum + item.fee, 0),
+      byGroup: [...groupMap.values()].sort(
+        (a, b) => b.totalFee - a.totalFee,
+      ),
+    }
+  }, [dateFrom, dateTo, groups, periods])
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("vi")
@@ -949,48 +961,68 @@ export function CanDoiPage() {
       <Card className="p-4">
         <div className="flex items-center gap-2">
           <Coins className="size-5" />
-          <h2 className="font-bold">Tiền thảo / lợi nhuận chủ hụi</h2>
+          <h2 className="font-bold">Tiền thảo tích lũy của chủ hụi</h2>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tiền thảo là doanh thu của chủ hụi theo từng kỳ đã chốt. Giá thăm
-          không được tính là lợi nhuận của chủ hụi.
+          Mỗi kỳ đã chốt, tiền thảo được trừ thẳng khỏi tiền giao cho người hốt
+          và được cộng dồn vào phần tiền thảo của chủ hụi. Giá thăm không phải
+          lợi nhuận của chủ hụi.
         </p>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
           <Metric
             label="Số kỳ đã chốt"
             value={String(feeSummary.items.length)}
           />
           <Metric
-            label="Tiền thảo phát sinh"
+            label="Tổng tiền thảo tích lũy"
             value={formatVND(feeSummary.totalFee)}
             emphasize
           />
-          <Metric
-            label="Đã ghi nhận qua chốt nhanh"
-            value={formatVND(feeSummary.recordedFee)}
-          />
         </div>
+
+        {feeSummary.byGroup.length > 0 && (
+          <div className="mt-4">
+            <p className="mb-2 text-sm font-semibold">Theo từng dây</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {feeSummary.byGroup.map((item) => (
+                <div
+                  key={item.groupName}
+                  className="rounded-md bg-muted/50 p-3 text-sm"
+                >
+                  <p className="font-medium">{item.groupName}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {item.periodCount} kỳ đã chốt
+                  </p>
+                  <p className="mt-1 font-bold">{formatVND(item.totalFee)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {feeSummary.items.length > 0 && (
           <div className="mt-4 space-y-2">
+            <p className="text-sm font-semibold">Chi tiết từng kỳ</p>
             {feeSummary.items.map((item) => (
               <div
                 key={item.period.id}
-                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+                className="grid grid-cols-[1fr_auto] gap-3 rounded-md border px-3 py-2 text-sm"
               >
                 <div className="min-w-0">
                   <p className="truncate font-medium">
                     {item.groupName} · Kỳ {item.period.period_number}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {item.period.scheduled_date} ·{" "}
-                    {item.isFullyRecorded
-                      ? "Đã ghi nhận thu/chi đủ"
-                      : "Chưa xác nhận đủ trên hệ thống"}
+                    {item.period.scheduled_date}
                   </p>
                 </div>
-                <p className="shrink-0 font-bold">{formatVND(item.fee)}</p>
+                <div className="text-right">
+                  <p className="font-bold">+ {formatVND(item.fee)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Lũy kế {formatVND(item.cumulativeFee)}
+                  </p>
+                </div>
               </div>
             ))}
           </div>
