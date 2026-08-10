@@ -25,6 +25,7 @@ type GroupRow = {
   contribution_amount: number
   total_shares: number
   fee_amount: number
+  status: string
 }
 
 type ShareRow = {
@@ -203,7 +204,7 @@ export function CanDoiPage() {
     ] = await Promise.all([
       supabase
         .from("hui_groups")
-        .select("id, code, name, contribution_amount, total_shares, fee_amount"),
+        .select("id, code, name, contribution_amount, total_shares, fee_amount, status"),
       supabase
         .from("hui_shares")
         .select("id, group_id, member_id, share_number, status")
@@ -254,7 +255,8 @@ export function CanDoiPage() {
   }, [loadData])
 
   const balances = useMemo(() => {
-    const groupsById = new Map(groups.map((group) => [group.id, group]))
+    const activeGroups = groups.filter((group) => group.status === "active")
+    const groupsById = new Map(activeGroups.map((group) => [group.id, group]))
     const membersById = new Map(members.map((member) => [member.id, member]))
     const sharesByGroup = new Map<string, ShareRow[]>()
     const periodsByGroup = new Map<string, PeriodRow[]>()
@@ -279,6 +281,7 @@ export function CanDoiPage() {
     const rangePeriods = periods.filter(
       (period) =>
         isCompleted(period.status) &&
+        groupsById.has(period.group_id) &&
         period.scheduled_date >= dateFrom &&
         period.scheduled_date <= dateTo,
     )
@@ -448,7 +451,8 @@ export function CanDoiPage() {
 
 
   const quickPeriods = useMemo(() => {
-    const groupsById = new Map(groups.map((group) => [group.id, group]))
+    const activeGroups = groups.filter((group) => group.status === "active")
+    const groupsById = new Map(activeGroups.map((group) => [group.id, group]))
     const receiptsById = new Map(receiptRows.map((receipt) => [receipt.id, receipt]))
     const groupPeriodsMap = new Map<string, PeriodRow[]>()
     const groupSharesMap = new Map<string, ShareRow[]>()
@@ -470,6 +474,7 @@ export function CanDoiPage() {
         (period) =>
           isCompleted(period.status) &&
           period.winner_share_id &&
+          groupsById.has(period.group_id) &&
           period.scheduled_date >= dateFrom &&
           period.scheduled_date <= dateTo,
       )
@@ -671,13 +676,15 @@ export function CanDoiPage() {
 
 
   const feeSummary = useMemo(() => {
-    const groupsById = new Map(groups.map((group) => [group.id, group]))
+    const activeGroups = groups.filter((group) => group.status === "active")
+    const groupsById = new Map(activeGroups.map((group) => [group.id, group]))
 
     const items = periods
       .filter(
         (period) =>
           isCompleted(period.status) &&
           period.winner_share_id &&
+          groupsById.has(period.group_id) &&
           period.scheduled_date >= dateFrom &&
           period.scheduled_date <= dateTo,
       )
@@ -688,6 +695,7 @@ export function CanDoiPage() {
         return {
           period,
           groupId: period.group_id,
+          groupCode: group?.code ?? "",
           groupName: group?.name ?? "Không rõ dây",
           fee,
         }
@@ -708,11 +716,12 @@ export function CanDoiPage() {
 
     const groupMap = new Map<
       string,
-      { groupName: string; periodCount: number; totalFee: number }
+      { groupCode: string; groupName: string; periodCount: number; totalFee: number }
     >()
 
     for (const item of items) {
       const current = groupMap.get(item.groupId) ?? {
+        groupCode: item.groupCode,
         groupName: item.groupName,
         periodCount: 0,
         totalFee: 0,
@@ -730,6 +739,70 @@ export function CanDoiPage() {
       ),
     }
   }, [dateFrom, dateTo, groups, periods])
+
+
+  const activeGroupSummary = useMemo(() => {
+    const activeGroups = groups
+      .filter((group) => group.status === "active")
+      .sort((a, b) => a.name.localeCompare(b.name, "vi"))
+
+    return activeGroups.map((group) => {
+      const groupPeriods = periods.filter(
+        (period) =>
+          period.group_id === group.id &&
+          isCompleted(period.status) &&
+          period.scheduled_date >= dateFrom &&
+          period.scheduled_date <= dateTo,
+      )
+
+      const fee = groupPeriods.reduce(
+        (sum, period) =>
+          sum + Number(period.fee_amount ?? group.fee_amount ?? 0),
+        0,
+      )
+
+      const paymentReceiptIds = new Set(
+        receiptRows
+          .filter(
+            (receipt) =>
+              receipt.status !== "cancelled" &&
+              receipt.receipt_date >= dateFrom &&
+              receipt.receipt_date <= dateTo,
+          )
+          .map((receipt) => receipt.id),
+      )
+
+      const periodIds = new Set(groupPeriods.map((period) => period.id))
+      let collected = 0
+      let paid = 0
+
+      for (const payment of payments) {
+        if (
+          payment.status !== "active" ||
+          !paymentReceiptIds.has(payment.receipt_id) ||
+          !payment.source_period_id ||
+          !periodIds.has(payment.source_period_id)
+        ) {
+          continue
+        }
+
+        if (payment.direction === "collect") {
+          collected += Number(payment.amount || 0)
+        } else {
+          paid += Number(payment.amount || 0)
+        }
+      }
+
+      return {
+        group,
+        completedPeriods: groupPeriods.length,
+        fee,
+        collected,
+        paid,
+        cashNet: collected - paid,
+      }
+    })
+  }, [dateFrom, dateTo, groups, payments, periods, receiptRows])
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("vi")
@@ -829,6 +902,63 @@ export function CanDoiPage() {
       </Card>
 
 
+
+      <Card className="p-4">
+        <div>
+          <h2 className="font-bold">Các dây đang hoạt động</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Chỉ hiển thị dây đang hoạt động. Dây đã đóng/kết thúc không đưa vào
+            bảng cân đối hiện tại.
+          </p>
+        </div>
+
+        {activeGroupSummary.length === 0 ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            Không có dây nào đang hoạt động.
+          </p>
+        ) : (
+          <div className="mt-4 space-y-2">
+            {activeGroupSummary.map((item) => (
+              <div
+                key={item.group.id}
+                className="rounded-lg border p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs font-semibold">
+                    {item.group.code || "CHƯA-MÃ"}
+                  </span>
+                  <p className="font-semibold">{item.group.name}</p>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  <Metric
+                    label="Kỳ đã chốt"
+                    value={String(item.completedPeriods)}
+                  />
+                  <Metric
+                    label="Đã thu"
+                    value={formatVND(item.collected)}
+                  />
+                  <Metric
+                    label="Đã chi"
+                    value={formatVND(item.paid)}
+                  />
+                  <Metric
+                    label="Tiền thảo"
+                    value={formatVND(item.fee)}
+                  />
+                  <Metric
+                    label="Tiền thực giữ"
+                    value={formatVND(item.cashNet)}
+                    emphasize
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Card className="p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -855,9 +985,14 @@ export function CanDoiPage() {
                 className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
-                  <p className="font-semibold">
-                    {item.group.name} · Kỳ {item.period.period_number}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs font-semibold">
+                      {item.group.code || "CHƯA-MÃ"}
+                    </span>
+                    <p className="font-semibold">
+                      {item.group.name} · Kỳ {item.period.period_number}
+                    </p>
+                  </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {item.period.scheduled_date} · Hốt: {item.winnerName} ·
                     Giá thăm {formatVND(item.period.bid_amount)}
@@ -990,7 +1125,12 @@ export function CanDoiPage() {
                   key={item.groupName}
                   className="rounded-md bg-muted/50 p-3 text-sm"
                 >
-                  <p className="font-medium">{item.groupName}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border bg-background px-2 py-0.5 font-mono text-[11px] font-semibold">
+                      {item.groupCode || "CHƯA-MÃ"}
+                    </span>
+                    <p className="font-medium">{item.groupName}</p>
+                  </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {item.periodCount} kỳ đã chốt
                   </p>
@@ -1010,9 +1150,14 @@ export function CanDoiPage() {
                 className="grid grid-cols-[1fr_auto] gap-3 rounded-md border px-3 py-2 text-sm"
               >
                 <div className="min-w-0">
-                  <p className="truncate font-medium">
-                    {item.groupName} · Kỳ {item.period.period_number}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-[11px] font-semibold">
+                      {item.groupCode || "CHƯA-MÃ"}
+                    </span>
+                    <p className="truncate font-medium">
+                      {item.groupName} · Kỳ {item.period.period_number}
+                    </p>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     {item.period.scheduled_date}
                   </p>
