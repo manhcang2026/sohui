@@ -7,11 +7,12 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { createClient } from "@/lib/supabase/client"
+import { authPasswordFromPin, isFourDigitPin } from "@/lib/auth/passcode"
 
 export default function LoginPage() {
   const router = useRouter()
   const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
+  const [secret, setSecret] = useState("")
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
@@ -20,13 +21,21 @@ export default function LoginPage() {
     setError("")
     setSubmitting(true)
 
-    const { error: authError } = await createClient().auth.signInWithPassword({
-      email,
-      password,
-    })
+    // Tương thích ngược:
+    // - nhập đúng 4 số => dùng PIN mới
+    // - nhập chuỗi khác => dùng password Supabase cũ
+    const password = isFourDigitPin(secret)
+      ? authPasswordFromPin(secret)
+      : secret
+
+    const { error: authError } =
+      await createClient().auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      })
 
     if (authError) {
-      setError("Email hoặc mật khẩu không đúng.")
+      setError("Email hoặc mã đăng nhập không đúng.")
       setSubmitting(false)
       return
     }
@@ -44,9 +53,10 @@ export default function LoginPage() {
           </div>
           <h1 className="text-xl font-bold">Đăng nhập Sổ Hụi</h1>
           <p className="text-sm text-muted-foreground">
-            Nhập tài khoản để tiếp tục quản lý.
+            Nhập email và mã 4 số.
           </p>
         </div>
+
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Email
@@ -58,21 +68,29 @@ export default function LoginPage() {
               onChange={(event) => setEmail(event.target.value)}
             />
           </label>
+
           <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Mật khẩu
+            Mã 4 số
             <Input
               type="password"
+              inputMode="numeric"
               autoComplete="current-password"
               required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
+              placeholder="0000"
             />
+            <span className="text-xs font-normal text-muted-foreground">
+              Tài khoản cũ chưa đổi mã vẫn có thể nhập mật khẩu cũ.
+            </span>
           </label>
+
           {error && (
             <p className="text-sm text-destructive" role="alert">
               {error}
             </p>
           )}
+
           <Button type="submit" disabled={submitting}>
             {submitting && <LoaderCircle className="size-4 animate-spin" />}
             {submitting ? "Đang đăng nhập..." : "Đăng nhập"}
