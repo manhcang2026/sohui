@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!["super_admin", "admin", "member"].includes(role)) {
+    if (!["admin", "member"].includes(role)) {
       return NextResponse.json(
         { error: "Vai trò không hợp lệ." },
         { status: 400 },
@@ -240,6 +240,22 @@ export async function PATCH(request: NextRequest) {
       const memberId = body.member_id ? String(body.member_id) : null
       const displayName = String(body.display_name ?? "").trim()
       const isActive = Boolean(body.is_active)
+
+      if (userId === auth.user.id) {
+        if (role !== "super_admin") {
+          return NextResponse.json(
+            { error: "Không thể hạ quyền tài khoản super admin đang đăng nhập." },
+            { status: 400 },
+          )
+        }
+
+        if (!isActive) {
+          return NextResponse.json(
+            { error: "Không thể tự khóa tài khoản super admin đang đăng nhập." },
+            { status: 400 },
+          )
+        }
+      }
 
       if (!["super_admin", "admin", "member"].includes(role)) {
         return NextResponse.json(
