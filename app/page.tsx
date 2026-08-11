@@ -15,7 +15,7 @@ import { MemberPortalPage } from "@/components/pages/member-portal"
 
 type AppProfile = {
   auth_user_id: string
-  email: string
+  email: string | null
   display_name: string | null
   role: "super_admin" | "admin" | "member"
   member_id: string | null
