@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
+import { HuiPerformanceView } from "@/components/hui-performance-view"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -2365,32 +2366,40 @@ function DayDetail({
       </div>
 
       <Tabs defaultValue="tongquan">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger
-            value="tongquan"
-            className="text-xs"
-          >
-            Tổng quan
-          </TabsTrigger>
-          <TabsTrigger
-            value="chan"
-            className="text-xs"
-          >
-            Chân hụi
-          </TabsTrigger>
-          <TabsTrigger
-            value="lich"
-            className="text-xs"
-          >
-            Lịch kỳ
-          </TabsTrigger>
-          <TabsTrigger
-            value="lichsu"
-            className="text-xs"
-          >
-            Lịch sử
-          </TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="grid min-w-[500px] w-full grid-cols-5">
+            <TabsTrigger
+              value="tongquan"
+              className="text-xs"
+            >
+              Tổng quan
+            </TabsTrigger>
+            <TabsTrigger
+              value="chan"
+              className="text-xs"
+            >
+              Chân hụi
+            </TabsTrigger>
+            <TabsTrigger
+              value="lich"
+              className="text-xs"
+            >
+              Lịch kỳ
+            </TabsTrigger>
+            <TabsTrigger
+              value="lichsu"
+              className="text-xs"
+            >
+              Lịch sử
+            </TabsTrigger>
+            <TabsTrigger
+              value="hieuqua"
+              className="text-xs"
+            >
+              Hiệu quả
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent
           value="tongquan"
@@ -3009,6 +3018,17 @@ function DayDetail({
               )}
             </div>
           </Card>
+        </TabsContent>
+
+        <TabsContent
+          value="hieuqua"
+          className="mt-3"
+        >
+          <HuiPerformanceView
+            shares={day.shares}
+            periods={day.periods}
+            members={members}
+          />
         </TabsContent>
       </Tabs>
 
