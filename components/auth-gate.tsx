@@ -14,32 +14,84 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const isPublicRoute = pathname === "/login"
 
   useEffect(() => {
+    let mounted = true
     const supabase = createClient()
 
-    void supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setLoading(false)
-      if (!data.session && !isPublicRoute) router.replace("/login")
-      if (data.session && isPublicRoute) router.replace("/")
-    })
+    async function initialize() {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+        if (!mounted) return
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession)
-      setLoading(false)
-      if (!nextSession && !isPublicRoute) router.replace("/login")
-    })
+        if (error) {
+          console.error("getSession error:", error)
+          setLoading(false)
+          return
+        }
 
-    return () => listener.subscription.unsubscribe()
+        setSession(data.session)
+        setLoading(false)
+
+        if (!data.session && !isPublicRoute) {
+          router.replace("/login")
+        } else if (data.session && isPublicRoute) {
+          router.replace("/")
+        }
+      } catch (error) {
+        console.error("Auth initialization error:", error)
+        if (mounted) setLoading(false)
+      }
+    }
+
+    void initialize()
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (event, nextSession) => {
+        if (!mounted) return
+
+        // Chỉ SIGNED_OUT mới được xem là đăng xuất thật.
+        // Không đá user vì một event refresh/session tạm thời trả null.
+        if (event === "SIGNED_OUT") {
+          setSession(null)
+          setLoading(false)
+          if (!isPublicRoute) router.replace("/login")
+          return
+        }
+
+        if (nextSession) {
+          setSession(nextSession)
+          setLoading(false)
+          if (isPublicRoute) router.replace("/")
+        }
+      },
+    )
+
+    return () => {
+      mounted = false
+      listener.subscription.unsubscribe()
+    }
   }, [isPublicRoute, router])
 
   if (isPublicRoute) return <>{children}</>
 
-  if (loading || !session) {
+  if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+        <div
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+        >
           <LoaderCircle className="size-5 animate-spin" />
           Đang kiểm tra đăng nhập...
+        </div>
+      </main>
+    )
+  }
+
+  if (!session) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-sm text-muted-foreground">
+          Đang chuyển đến trang đăng nhập...
         </div>
       </main>
     )
