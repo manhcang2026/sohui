@@ -121,6 +121,8 @@ const EMPTY_FORM: GroupForm = {
   start_date: "",
   opening_time: "19:00",
   fee_amount: "0",
+  minimum_bid_amount: "0",
+  bid_step_amount: "1",
   status: "active",
   notes: "",
 }
@@ -185,11 +187,19 @@ function toDateOnly(date: Date) {
   return `${year}-${month}-${day}`
 }
 
-function addMonthsClamped(source: Date, monthsToAdd: number, preferredDay: number) {
+function addMonthsClamped(
+  source: Date,
+  monthsToAdd: number,
+  preferredDay: number,
+) {
   const targetYear = source.getFullYear()
   const targetMonth = source.getMonth() + monthsToAdd
   const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate()
-  return new Date(targetYear, targetMonth, Math.min(preferredDay, lastDay))
+  return new Date(
+    targetYear,
+    targetMonth,
+    Math.min(preferredDay, lastDay),
+  )
 }
 
 function generateSchedule(
@@ -238,14 +248,15 @@ function generateSchedule(
   })
 }
 
-
 function calculateEstimatedEndDate(
   startDate: string,
   totalPeriods: number,
   frequencyType: FrequencyType,
   frequencyValue: number,
 ) {
-  if (!startDate || totalPeriods <= 0 || frequencyValue <= 0) return null
+  if (!startDate || totalPeriods <= 0 || frequencyValue <= 0) {
+    return null
+  }
 
   const [year, month, day] = startDate.split("-").map(Number)
   const baseDate = new Date(year, month - 1, day)
@@ -269,13 +280,13 @@ function calculateEstimatedEndDate(
   return toDateOnly(result)
 }
 
-function numericValue(value: string) {
-  const digits = value.replace(/\D/g, "")
+function numericValue(value: string | null | undefined) {
+  const digits = String(value ?? "").replace(/\D/g, "")
   return digits ? Number(digits) : 0
 }
 
-function formatMoneyInput(value: string) {
-  const digits = value.replace(/\D/g, "")
+function formatMoneyInput(value: string | null | undefined) {
+  const digits = String(value ?? "").replace(/\D/g, "")
   if (!digits) return ""
   return new Intl.NumberFormat("vi-VN").format(Number(digits))
 }
@@ -305,28 +316,32 @@ export function DayHuiPage() {
     setError("")
 
     const supabase = createClient()
-    const [groupsResult, sharesResult, periodsResult, membersResult] =
-      await Promise.all([
-        supabase
-          .from("hui_groups")
-          .select(
-            "id, code, name, contribution_amount, total_shares, interval_days, start_date, fee_amount, minimum_bid_amount, bid_step_amount, status, notes, frequency_type, frequency_value, opening_time, created_at, updated_at",
-          )
-          .order("start_date", { ascending: false }),
-        supabase
-          .from("hui_shares")
-          .select(
-            "id, group_id, member_id, share_number, status, joined_at, notes, created_at",
-          )
-          .order("share_number"),
-        supabase
-          .from("hui_periods")
-          .select(
-            "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes, created_at, updated_at",
-          )
-          .order("period_number"),
-        supabase.from("members").select("id, full_name, phone"),
-      ])
+    const [
+      groupsResult,
+      sharesResult,
+      periodsResult,
+      membersResult,
+    ] = await Promise.all([
+      supabase
+        .from("hui_groups")
+        .select(
+          "id, code, name, contribution_amount, total_shares, interval_days, start_date, fee_amount, minimum_bid_amount, bid_step_amount, status, notes, frequency_type, frequency_value, opening_time, created_at, updated_at",
+        )
+        .order("start_date", { ascending: false }),
+      supabase
+        .from("hui_shares")
+        .select(
+          "id, group_id, member_id, share_number, status, joined_at, notes, created_at",
+        )
+        .order("share_number"),
+      supabase
+        .from("hui_periods")
+        .select(
+          "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, minimum_bid_amount, bid_step_amount, status, notes, created_at, updated_at",
+        )
+        .order("period_number"),
+      supabase.from("members").select("id, full_name, phone"),
+    ])
 
     const firstError =
       groupsResult.error ??
@@ -521,14 +536,18 @@ function DayList({
                     </div>
 
                     <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                      <span>{formatVND(group.contribution_amount)}/chân</span>
+                      <span>
+                        {formatVND(group.contribution_amount)}/chân
+                      </span>
                       <span>
                         {frequencyLabel(
                           group.frequency_type,
                           group.frequency_value,
                         )}
                       </span>
-                      <span>Giờ khui: {formatTime(group.opening_time)}</span>
+                      <span>
+                        Giờ khui: {formatTime(group.opening_time)}
+                      </span>
                       <span>
                         Kỳ tiếp:{" "}
                         {nextPeriod
@@ -580,6 +599,7 @@ function GroupDialog({
   const groupPeriods = group
     ? periods.filter((period) => period.group_id === group.id)
     : []
+
   const scheduleLocked = groupPeriods.some(
     (period) =>
       period.status === "opened" ||
@@ -592,12 +612,15 @@ function GroupDialog({
       ? {
           code: group.code ?? "",
           name: group.name,
-          contribution_amount: formatMoneyInput(String(group.contribution_amount)),
+          contribution_amount: formatMoneyInput(
+            String(group.contribution_amount),
+          ),
           total_shares: String(group.total_shares),
           frequency_type: group.frequency_type,
           frequency_value: String(group.frequency_value),
           start_date: group.start_date,
-          opening_time: group.opening_time?.slice(0, 5) ?? "19:00",
+          opening_time:
+            group.opening_time?.slice(0, 5) ?? "19:00",
           fee_amount: formatMoneyInput(String(group.fee_amount)),
           minimum_bid_amount: formatMoneyInput(
             String(group.minimum_bid_amount ?? 0),
@@ -613,9 +636,12 @@ function GroupDialog({
           code: autoCode(groups),
         },
   )
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
-  const [feeManuallyEdited, setFeeManuallyEdited] = useState(Boolean(group))
+  const [feeManuallyEdited, setFeeManuallyEdited] = useState(
+    Boolean(group),
+  )
 
   const setField = (key: keyof GroupForm, value: string) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -624,11 +650,15 @@ function GroupDialog({
     event.preventDefault()
     setError("")
 
-    const contributionAmount = numericValue(form.contribution_amount)
+    const contributionAmount = numericValue(
+      form.contribution_amount,
+    )
     const totalShares = Number(form.total_shares)
     const frequencyValue = Number(form.frequency_value)
     const feeAmount = numericValue(form.fee_amount)
-    const minimumBidAmount = numericValue(form.minimum_bid_amount)
+    const minimumBidAmount = numericValue(
+      form.minimum_bid_amount,
+    )
     const bidStepAmount = numericValue(form.bid_step_amount)
 
     if (!form.code.trim()) {
@@ -639,7 +669,10 @@ function GroupDialog({
       setError("Tên dây là bắt buộc.")
       return
     }
-    if (!Number.isFinite(contributionAmount) || contributionAmount <= 0) {
+    if (
+      !Number.isFinite(contributionAmount) ||
+      contributionAmount <= 0
+    ) {
       setError("Mệnh giá phải lớn hơn 0.")
       return
     }
@@ -647,7 +680,10 @@ function GroupDialog({
       setError("Tổng số chân phải là số nguyên lớn hơn 0.")
       return
     }
-    if (!Number.isInteger(frequencyValue) || frequencyValue <= 0) {
+    if (
+      !Number.isInteger(frequencyValue) ||
+      frequencyValue <= 0
+    ) {
       setError("Khoảng cách chu kỳ phải lớn hơn 0.")
       return
     }
@@ -685,7 +721,8 @@ function GroupDialog({
       total_shares: totalShares,
       interval_days: intervalDays,
       start_date: form.start_date,
-      fee_amount: scheduleLocked && group ? group.fee_amount : feeAmount,
+      fee_amount:
+        scheduleLocked && group ? group.fee_amount : feeAmount,
       minimum_bid_amount: minimumBidAmount,
       bid_step_amount: bidStepAmount,
       status: form.status,
@@ -697,11 +734,12 @@ function GroupDialog({
     }
 
     if (!group) {
-      const { data: created, error: createError } = await supabase
-        .from("hui_groups")
-        .insert(groupPayload)
-        .select("id")
-        .single()
+      const { data: created, error: createError } =
+        await supabase
+          .from("hui_groups")
+          .insert(groupPayload)
+          .select("id")
+          .single()
 
       if (createError || !created) {
         console.error(createError)
@@ -732,8 +770,13 @@ function GroupDialog({
 
       if (periodsError) {
         console.error(periodsError)
-        await supabase.from("hui_groups").delete().eq("id", created.id)
-        setError("Không thể tạo lịch khui. Dây hụi chưa được lưu.")
+        await supabase
+          .from("hui_groups")
+          .delete()
+          .eq("id", created.id)
+        setError(
+          "Không thể tạo lịch khui. Dây hụi chưa được lưu.",
+        )
         setSaving(false)
         return
       }
@@ -766,7 +809,9 @@ function GroupDialog({
 
       if (deletePeriodsError) {
         console.error(deletePeriodsError)
-        setError("Đã sửa thông tin dây nhưng chưa cập nhật được lịch khui.")
+        setError(
+          "Đã sửa thông tin dây nhưng chưa cập nhật được lịch khui.",
+        )
         setSaving(false)
         return
       }
@@ -816,9 +861,10 @@ function GroupDialog({
           notes: period.notes,
         }))
 
-        const { error: updateFuturePeriodsError } = await supabase
-          .from("hui_periods")
-          .upsert(updates, { onConflict: "id" })
+        const { error: updateFuturePeriodsError } =
+          await supabase
+            .from("hui_periods")
+            .upsert(updates, { onConflict: "id" })
 
         if (updateFuturePeriodsError) {
           console.error(updateFuturePeriodsError)
@@ -837,6 +883,7 @@ function GroupDialog({
   const schedulePreview = useMemo(() => {
     const totalShares = Number(form.total_shares)
     const frequencyValue = Number(form.frequency_value)
+
     if (
       !form.start_date ||
       !form.opening_time ||
@@ -894,13 +941,17 @@ function GroupDialog({
       <Card className="max-h-[92vh] w-full max-w-3xl overflow-y-auto p-5">
         <div className="flex items-center justify-between">
           <div>
-            <h2 id="group-dialog-title" className="text-lg font-bold">
+            <h2
+              id="group-dialog-title"
+              className="text-lg font-bold"
+            >
               {group ? "Sửa dây hụi" : "Tạo dây hụi"}
             </h2>
             <p className="text-sm text-muted-foreground">
               Hệ thống tự sinh lịch khui theo chu kỳ đã chọn.
             </p>
           </div>
+
           <Button
             variant="ghost"
             size="icon"
@@ -913,21 +964,27 @@ function GroupDialog({
 
         {scheduleLocked && (
           <Card className="mt-4 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-            Dây đã có kỳ được khui hoặc chốt. Bạn vẫn sửa được mã, tên,
-            tiền thảo, giờ khui, ghi chú và trạng thái. Ngày khui, chu kỳ và
-            số chân được khóa để bảo vệ dữ liệu cũ. Giờ mới chỉ áp dụng cho
-            các kỳ chưa khui.
+            Dây đã có kỳ được khui hoặc chốt. Bạn vẫn sửa được
+            mã, tên, giờ khui, ghi chú và trạng thái. Ngày khui,
+            chu kỳ, số chân và tiền thảo lịch sử được khóa để bảo
+            vệ dữ liệu cũ. Giờ mới chỉ áp dụng cho các kỳ chưa
+            khui.
           </Card>
         )}
 
-        <form className="mt-5 flex flex-col gap-5" onSubmit={submit}>
+        <form
+          className="mt-5 flex flex-col gap-5"
+          onSubmit={submit}
+        >
           <div className="grid gap-4 md:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Mã dây
               <Input
                 required
                 value={form.code}
-                onChange={(event) => setField("code", event.target.value)}
+                onChange={(event) =>
+                  setField("code", event.target.value)
+                }
                 placeholder="HUI-001"
               />
             </label>
@@ -937,7 +994,9 @@ function GroupDialog({
               <Input
                 required
                 value={form.name}
-                onChange={(event) => setField("name", event.target.value)}
+                onChange={(event) =>
+                  setField("name", event.target.value)
+                }
                 placeholder="Hụi tuần 1 triệu"
               />
             </label>
@@ -950,8 +1009,13 @@ function GroupDialog({
                   required
                   value={form.contribution_amount}
                   onChange={(event) => {
-                    const formatted = formatMoneyInput(event.target.value)
-                    setField("contribution_amount", formatted)
+                    const formatted = formatMoneyInput(
+                      event.target.value,
+                    )
+                    setField(
+                      "contribution_amount",
+                      formatted,
+                    )
 
                     if (!feeManuallyEdited) {
                       const amount = numericValue(formatted)
@@ -959,7 +1023,11 @@ function GroupDialog({
                         "fee_amount",
                         amount > 0
                           ? formatMoneyInput(
-                              String(Math.round(amount * 0.03)),
+                              String(
+                                Math.round(
+                                  amount * 0.3,
+                                ),
+                              ),
                             )
                           : "",
                       )
@@ -983,7 +1051,10 @@ function GroupDialog({
                 disabled={scheduleLocked}
                 value={form.total_shares}
                 onChange={(event) =>
-                  setField("total_shares", event.target.value)
+                  setField(
+                    "total_shares",
+                    event.target.value,
+                  )
                 }
               />
             </label>
@@ -1023,7 +1094,10 @@ function GroupDialog({
                 disabled={scheduleLocked}
                 value={form.frequency_value}
                 onChange={(event) =>
-                  setField("frequency_value", event.target.value)
+                  setField(
+                    "frequency_value",
+                    event.target.value,
+                  )
                 }
               />
             </label>
@@ -1036,7 +1110,10 @@ function GroupDialog({
                 disabled={scheduleLocked}
                 value={form.start_date}
                 onChange={(event) =>
-                  setField("start_date", event.target.value)
+                  setField(
+                    "start_date",
+                    event.target.value,
+                  )
                 }
               />
             </label>
@@ -1048,7 +1125,10 @@ function GroupDialog({
                 required
                 value={form.opening_time}
                 onChange={(event) =>
-                  setField("opening_time", event.target.value)
+                  setField(
+                    "opening_time",
+                    event.target.value,
+                  )
                 }
               />
               {scheduleLocked && (
@@ -1069,10 +1149,12 @@ function GroupDialog({
                     setFeeManuallyEdited(true)
                     setField(
                       "fee_amount",
-                      formatMoneyInput(event.target.value),
+                      formatMoneyInput(
+                        event.target.value,
+                      ),
                     )
                   }}
-                  placeholder="Mặc định 3% mệnh giá"
+                  placeholder="Mặc định 30% mệnh giá 1 chân"
                   className="pr-10"
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
@@ -1082,7 +1164,7 @@ function GroupDialog({
               <span className="text-xs font-normal text-muted-foreground">
                 {scheduleLocked
                   ? "Dây đã có kỳ hoàn tất nên tiền thảo được khóa cố định."
-                  : "Tự tính 3% mệnh giá; có thể sửa trước khi chốt kỳ đầu tiên."}
+                  : "Tự tính 30% mệnh giá 1 chân; có thể sửa trước khi chốt kỳ đầu tiên."}
               </span>
             </label>
 
@@ -1095,7 +1177,9 @@ function GroupDialog({
                   onChange={(event) =>
                     setField(
                       "minimum_bid_amount",
-                      formatMoneyInput(event.target.value),
+                      formatMoneyInput(
+                        event.target.value,
+                      ),
                     )
                   }
                   placeholder="Ví dụ: 100.000đ"
@@ -1116,7 +1200,9 @@ function GroupDialog({
                   onChange={(event) =>
                     setField(
                       "bid_step_amount",
-                      formatMoneyInput(event.target.value),
+                      formatMoneyInput(
+                        event.target.value,
+                      ),
                     )
                   }
                   placeholder="Ví dụ: 50.000đ"
@@ -1140,10 +1226,16 @@ function GroupDialog({
                   setField("status", event.target.value)
                 }
               >
-                <option value="active">Đang hoạt động</option>
+                <option value="active">
+                  Đang hoạt động
+                </option>
                 <option value="draft">Bản nháp</option>
-                <option value="completed">Đã kết thúc</option>
-                <option value="cancelled">Đã hủy</option>
+                <option value="completed">
+                  Đã kết thúc
+                </option>
+                <option value="cancelled">
+                  Đã hủy
+                </option>
               </select>
             </label>
 
@@ -1162,7 +1254,9 @@ function GroupDialog({
           {estimatedEndDate && (
             <Card className="grid gap-3 p-4 sm:grid-cols-3">
               <div>
-                <p className="text-xs text-muted-foreground">Dự kiến mãn hụi</p>
+                <p className="text-xs text-muted-foreground">
+                  Dự kiến mãn hụi
+                </p>
                 <p className="font-semibold">
                   {formatDate(estimatedEndDate)}
                 </p>
@@ -1172,64 +1266,96 @@ function GroupDialog({
                   Giá thăm tối thiểu
                 </p>
                 <p className="font-semibold">
-                  {formatVND(numericValue(form.minimum_bid_amount))}
+                  {formatVND(
+                    numericValue(
+                      form.minimum_bid_amount,
+                    ),
+                  )}
                 </p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Bước thăm</p>
+                <p className="text-xs text-muted-foreground">
+                  Bước thăm
+                </p>
                 <p className="font-semibold">
-                  {formatVND(numericValue(form.bid_step_amount))}
+                  {formatVND(
+                    numericValue(form.bid_step_amount),
+                  )}
                 </p>
               </div>
             </Card>
           )}
 
-          {!scheduleLocked && schedulePreview.length > 0 && (
-            <Card className="p-4">
-              <p className="font-medium">Xem trước lịch khui</p>
-              <p className="mb-3 text-xs text-muted-foreground">
-                {frequencyLabel(
-                  form.frequency_type,
-                  Number(form.frequency_value),
-                )}{" "}
-                lúc {form.opening_time}
-              </p>
-              <div className="grid gap-2 md:grid-cols-2">
-                {schedulePreview.map((period) => (
-                  <div
-                    key={period.period_number}
-                    className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm"
-                  >
-                    <span>Kỳ {period.period_number}</span>
-                    <span className="text-muted-foreground">
-                      {formatDate(period.scheduled_date)} •{" "}
-                      {form.opening_time}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              {Number(form.total_shares) > schedulePreview.length && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  … và {Number(form.total_shares) - schedulePreview.length} kỳ
-                  tiếp theo.
+          {!scheduleLocked &&
+            schedulePreview.length > 0 && (
+              <Card className="p-4">
+                <p className="font-medium">
+                  Xem trước lịch khui
                 </p>
-              )}
-            </Card>
-          )}
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {frequencyLabel(
+                    form.frequency_type,
+                    Number(form.frequency_value),
+                  )}{" "}
+                  lúc {form.opening_time}
+                </p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {schedulePreview.map((period) => (
+                    <div
+                      key={period.period_number}
+                      className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm"
+                    >
+                      <span>
+                        Kỳ {period.period_number}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {formatDate(
+                          period.scheduled_date,
+                        )}{" "}
+                        • {form.opening_time}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {Number(form.total_shares) >
+                  schedulePreview.length && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    … và{" "}
+                    {Number(form.total_shares) -
+                      schedulePreview.length}{" "}
+                    kỳ tiếp theo.
+                  </p>
+                )}
+              </Card>
+            )}
 
           {error && (
-            <p className="text-sm text-destructive" role="alert">
+            <p
+              className="text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </p>
           )}
 
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+            >
               Hủy
             </Button>
-            <Button type="submit" disabled={saving}>
-              {saving && <LoaderCircle className="size-4 animate-spin" />}
-              {group ? "Lưu thay đổi" : "Tạo dây và lịch khui"}
+            <Button
+              type="submit"
+              disabled={saving}
+            >
+              {saving && (
+                <LoaderCircle className="size-4 animate-spin" />
+              )}
+              {group
+                ? "Lưu thay đổi"
+                : "Tạo dây và lịch khui"}
             </Button>
           </div>
         </form>
@@ -1237,7 +1363,6 @@ function GroupDialog({
     </div>
   )
 }
-
 
 function ShareDialog({
   day,
@@ -1257,6 +1382,7 @@ function ShareDialog({
       .filter((item) => item.id !== share?.id)
       .map((item) => item.share_number),
   )
+
   const availableNumbers = Array.from(
     { length: day.total_shares },
     (_, index) => index + 1,
@@ -1266,26 +1392,40 @@ function ShareDialog({
     share?.member_id ?? members[0]?.id ?? "",
   )
   const [shareNumber, setShareNumber] = useState(
-    String(share?.share_number ?? availableNumbers[0] ?? ""),
+    String(
+      share?.share_number ??
+        availableNumbers[0] ??
+        "",
+    ),
   )
-  const [status, setStatus] = useState(share?.status ?? "active")
+  const [status, setStatus] = useState(
+    share?.status ?? "active",
+  )
   const [joinedAt, setJoinedAt] = useState(
-    share?.joined_at?.slice(0, 10) ?? day.start_date,
+    share?.joined_at?.slice(0, 10) ??
+      day.start_date,
   )
-  const [notes, setNotes] = useState(share?.notes ?? "")
+  const [notes, setNotes] = useState(
+    share?.notes ?? "",
+  )
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState("")
-  const [addMode, setAddMode] = useState<"quick" | "specific">(
-    share ? "specific" : "quick",
-  )
+  const [addMode, setAddMode] = useState<
+    "quick" | "specific"
+  >(share ? "specific" : "quick")
   const [quantity, setQuantity] = useState("1")
 
   const hasWon = share
-    ? day.periods.some((period) => period.winner_share_id === share.id)
+    ? day.periods.some(
+        (period) =>
+          period.winner_share_id === share.id,
+      )
     : false
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault()
     setError("")
 
@@ -1298,10 +1438,17 @@ function ShareDialog({
 
     if (!share && addMode === "quick") {
       const count = Number(quantity)
-      if (!Number.isInteger(count) || count <= 0) {
-        setError("Số lượng chân phải là số nguyên lớn hơn 0.")
+
+      if (
+        !Number.isInteger(count) ||
+        count <= 0
+      ) {
+        setError(
+          "Số lượng chân phải là số nguyên lớn hơn 0.",
+        )
         return
       }
+
       if (count > availableNumbers.length) {
         setError(
           `Dây chỉ còn ${availableNumbers.length} chân trống, không thể thêm ${count} chân.`,
@@ -1310,19 +1457,25 @@ function ShareDialog({
       }
 
       setSaving(true)
-      const numbersToUse = availableNumbers.slice(0, count)
-      const payloads = numbersToUse.map((number) => ({
-        group_id: day.id,
-        member_id: memberId,
-        share_number: number,
-        status,
-        joined_at: joinedAt || null,
-        notes: notes.trim() || null,
-      }))
 
-      const { error: saveError } = await supabase
-        .from("hui_shares")
-        .insert(payloads)
+      const numbersToUse =
+        availableNumbers.slice(0, count)
+
+      const payloads = numbersToUse.map(
+        (number) => ({
+          group_id: day.id,
+          member_id: memberId,
+          share_number: number,
+          status,
+          joined_at: joinedAt || null,
+          notes: notes.trim() || null,
+        }),
+      )
+
+      const { error: saveError } =
+        await supabase
+          .from("hui_shares")
+          .insert(payloads)
 
       if (saveError) {
         console.error(saveError)
@@ -1340,20 +1493,27 @@ function ShareDialog({
     }
 
     const number = Number(shareNumber)
+
     if (
       !Number.isInteger(number) ||
       number < 1 ||
       number > day.total_shares
     ) {
-      setError(`Số chân phải từ 1 đến ${day.total_shares}.`)
+      setError(
+        `Số chân phải từ 1 đến ${day.total_shares}.`,
+      )
       return
     }
+
     if (usedNumbers.has(number)) {
-      setError(`Chân số ${number} đã có người giữ.`)
+      setError(
+        `Chân số ${number} đã có người giữ.`,
+      )
       return
     }
 
     setSaving(true)
+
     const payload = {
       group_id: day.id,
       member_id: memberId,
@@ -1364,10 +1524,16 @@ function ShareDialog({
     }
 
     const query = share
-      ? supabase.from("hui_shares").update(payload).eq("id", share.id)
-      : supabase.from("hui_shares").insert(payload)
+      ? supabase
+          .from("hui_shares")
+          .update(payload)
+          .eq("id", share.id)
+      : supabase
+          .from("hui_shares")
+          .insert(payload)
 
     const { error: saveError } = await query
+
     if (saveError) {
       console.error(saveError)
       setError(
@@ -1384,13 +1550,15 @@ function ShareDialog({
 
   async function performDelete() {
     if (!share) return
+
     setDeleting(true)
     setError("")
 
-    const { error: deleteError } = await createClient()
-      .from("hui_shares")
-      .delete()
-      .eq("id", share.id)
+    const { error: deleteError } =
+      await createClient()
+        .from("hui_shares")
+        .delete()
+        .eq("id", share.id)
 
     if (deleteError) {
       console.error(deleteError)
@@ -1406,14 +1574,21 @@ function ShareDialog({
 
   async function requestDelete() {
     if (!share) return
+
     if (hasWon) {
-      setError("Chân đã hốt nên không thể xóa.")
+      setError(
+        "Chân đã hốt nên không thể xóa.",
+      )
       return
     }
+
     const confirmed = window.confirm(
       `Xóa chân số ${share.share_number} khỏi dây ${day.name}?`,
     )
-    if (confirmed) await performDelete()
+
+    if (confirmed) {
+      await performDelete()
+    }
   }
 
   return (
@@ -1423,14 +1598,21 @@ function ShareDialog({
       aria-modal="true"
       aria-labelledby="share-dialog-title"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
       }}
     >
       <Card className="max-h-[90vh] w-full max-w-lg overflow-y-auto p-5">
         <div className="flex items-center justify-between">
           <div>
-            <h2 id="share-dialog-title" className="text-lg font-bold">
-              {share ? `Sửa chân ${share.share_number}` : "Thêm chân hụi"}
+            <h2
+              id="share-dialog-title"
+              className="text-lg font-bold"
+            >
+              {share
+                ? `Sửa chân ${share.share_number}`
+                : "Thêm chân hụi"}
             </h2>
             <p className="text-sm text-muted-foreground">
               {day.code} • {day.name}
@@ -1446,24 +1628,39 @@ function ShareDialog({
           </Button>
         </div>
 
-        <form className="mt-5 flex flex-col gap-4" onSubmit={submit}>
+        <form
+          className="mt-5 flex flex-col gap-4"
+          onSubmit={submit}
+        >
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Hụi viên
             <select
               required
               className="h-9 rounded-md border border-input bg-background px-3 text-sm"
               value={memberId}
-              onChange={(event) => setMemberId(event.target.value)}
+              onChange={(event) =>
+                setMemberId(event.target.value)
+              }
             >
-              <option value="">Chọn hụi viên</option>
+              <option value="">
+                Chọn hụi viên
+              </option>
               {[...members]
                 .sort((a, b) =>
-                  a.full_name.localeCompare(b.full_name, "vi"),
+                  a.full_name.localeCompare(
+                    b.full_name,
+                    "vi",
+                  ),
                 )
                 .map((member) => (
-                  <option key={member.id} value={member.id}>
+                  <option
+                    key={member.id}
+                    value={member.id}
+                  >
                     {member.full_name}
-                    {member.phone ? ` — ${member.phone}` : ""}
+                    {member.phone
+                      ? ` — ${member.phone}`
+                      : ""}
                   </option>
                 ))}
             </select>
@@ -1473,7 +1670,9 @@ function ShareDialog({
             <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
               <button
                 type="button"
-                onClick={() => setAddMode("quick")}
+                onClick={() =>
+                  setAddMode("quick")
+                }
                 className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   addMode === "quick"
                     ? "bg-background shadow-sm"
@@ -1484,7 +1683,9 @@ function ShareDialog({
               </button>
               <button
                 type="button"
-                onClick={() => setAddMode("specific")}
+                onClick={() =>
+                  setAddMode("specific")
+                }
                 className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   addMode === "specific"
                     ? "bg-background shadow-sm"
@@ -1496,7 +1697,8 @@ function ShareDialog({
             </div>
           )}
 
-          {!share && addMode === "quick" ? (
+          {!share &&
+          addMode === "quick" ? (
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Số lượng chân
               <Input
@@ -1505,50 +1707,76 @@ function ShareDialog({
                 max={availableNumbers.length}
                 required
                 value={quantity}
-                onChange={(event) => setQuantity(event.target.value)}
+                onChange={(event) =>
+                  setQuantity(event.target.value)
+                }
               />
               <span className="text-xs font-normal text-muted-foreground">
-                Hệ thống tự lấy {quantity || "0"} số chân trống nhỏ nhất.
-                Hiện còn {availableNumbers.length} chân trống.
+                Hệ thống tự lấy{" "}
+                {quantity || "0"} số chân
+                trống nhỏ nhất. Hiện còn{" "}
+                {availableNumbers.length} chân
+                trống.
               </span>
             </label>
           ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Số chân
-              <select
-                required
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                value={shareNumber}
-                onChange={(event) => setShareNumber(event.target.value)}
-              >
-                {share && (
-                  <option value={share.share_number}>
-                    Chân {share.share_number}
-                  </option>
-                )}
-                {availableNumbers
-                  .filter((number) => number !== share?.share_number)
-                  .map((number) => (
-                    <option key={number} value={number}>
-                      Chân {number}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium">
+                Số chân
+                <select
+                  required
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={shareNumber}
+                  onChange={(event) =>
+                    setShareNumber(
+                      event.target.value,
+                    )
+                  }
+                >
+                  {share && (
+                    <option
+                      value={share.share_number}
+                    >
+                      Chân {share.share_number}
                     </option>
-                  ))}
-              </select>
-            </label>
+                  )}
+                  {availableNumbers
+                    .filter(
+                      (number) =>
+                        number !==
+                        share?.share_number,
+                    )
+                    .map((number) => (
+                      <option
+                        key={number}
+                        value={number}
+                      >
+                        Chân {number}
+                      </option>
+                    ))}
+                </select>
+              </label>
 
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Trạng thái
-              <select
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                value={status}
-                onChange={(event) => setStatus(event.target.value)}
-              >
-                <option value="active">Hoạt động</option>
-                <option value="inactive">Tạm ngưng</option>
-              </select>
-            </label>
-          </div>
+              <label className="flex flex-col gap-1.5 text-sm font-medium">
+                Trạng thái
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={status}
+                  onChange={(event) =>
+                    setStatus(
+                      event.target.value,
+                    )
+                  }
+                >
+                  <option value="active">
+                    Hoạt động
+                  </option>
+                  <option value="inactive">
+                    Tạm ngưng
+                  </option>
+                </select>
+              </label>
+            </div>
           )}
 
           <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -1556,7 +1784,9 @@ function ShareDialog({
             <Input
               type="date"
               value={joinedAt}
-              onChange={(event) => setJoinedAt(event.target.value)}
+              onChange={(event) =>
+                setJoinedAt(event.target.value)
+              }
             />
           </label>
 
@@ -1565,25 +1795,41 @@ function ShareDialog({
             <textarea
               className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={notes}
-              onChange={(event) => setNotes(event.target.value)}
+              onChange={(event) =>
+                setNotes(event.target.value)
+              }
               placeholder="Ví dụ: giữ 2 chân, chuyển nhượng từ kỳ..."
             />
           </label>
 
-          {!share && addMode === "quick" && Number(quantity) > 0 && (
-            <Card className="p-3">
-              <p className="text-sm font-medium">Xem trước</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Hụi viên này sẽ được thêm vào các chân:{" "}
-                {availableNumbers
-                  .slice(0, Math.max(0, Number(quantity)))
-                  .join(", ") || "—"}
-              </p>
-            </Card>
-          )}
+          {!share &&
+            addMode === "quick" &&
+            Number(quantity) > 0 && (
+              <Card className="p-3">
+                <p className="text-sm font-medium">
+                  Xem trước
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Hụi viên này sẽ được thêm
+                  vào các chân:{" "}
+                  {availableNumbers
+                    .slice(
+                      0,
+                      Math.max(
+                        0,
+                        Number(quantity),
+                      ),
+                    )
+                    .join(", ") || "—"}
+                </p>
+              </Card>
+            )}
 
           {error && (
-            <p className="text-sm text-destructive" role="alert">
+            <p
+              className="text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </p>
           )}
@@ -1595,8 +1841,14 @@ function ShareDialog({
                   type="button"
                   variant="outline"
                   className="text-destructive"
-                  disabled={deleting || saving || hasWon}
-                  onClick={() => void requestDelete()}
+                  disabled={
+                    deleting ||
+                    saving ||
+                    hasWon
+                  }
+                  onClick={() =>
+                    void requestDelete()
+                  }
                 >
                   {deleting ? (
                     <LoaderCircle className="size-4 animate-spin" />
@@ -1607,13 +1859,26 @@ function ShareDialog({
                 </Button>
               )}
             </div>
+
             <div className="flex gap-2">
-              <Button type="button" variant="outline" onClick={onClose}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onClose}
+              >
                 Hủy
               </Button>
-              <Button type="submit" disabled={saving || deleting}>
-                {saving && <LoaderCircle className="size-4 animate-spin" />}
-                {!share && addMode === "quick"
+              <Button
+                type="submit"
+                disabled={
+                  saving || deleting
+                }
+              >
+                {saving && (
+                  <LoaderCircle className="size-4 animate-spin" />
+                )}
+                {!share &&
+                addMode === "quick"
                   ? `Thêm ${quantity || 0} chân`
                   : "Lưu chân"}
               </Button>
@@ -1622,7 +1887,8 @@ function ShareDialog({
 
           {hasWon && (
             <p className="text-xs text-muted-foreground">
-              Chân này đã hốt nên không thể xóa, nhưng vẫn có thể cập nhật
+              Chân này đã hốt nên không thể
+              xóa, nhưng vẫn có thể cập nhật
               trạng thái hoặc ghi chú.
             </p>
           )}
@@ -1631,7 +1897,6 @@ function ShareDialog({
     </div>
   )
 }
-
 
 function PeriodDialog({
   day,
@@ -1647,40 +1912,78 @@ function PeriodDialog({
   onSaved: () => Promise<void>
 }) {
   const eligibleShares = [...day.shares]
-    .filter((share) => share.status === "active" || share.id === period.winner_share_id)
-    .sort((a, b) => a.share_number - b.share_number)
+    .filter(
+      (share) =>
+        share.status === "active" ||
+        share.id ===
+          period.winner_share_id,
+    )
+    .sort(
+      (a, b) =>
+        a.share_number - b.share_number,
+    )
 
   const defaultOpenedAt = period.opened_at
-    ? new Date(period.opened_at).toLocaleString("sv-SE", {
-        timeZone: "Asia/Ho_Chi_Minh",
-      }).slice(0, 16)
-    : `${period.scheduled_date}T${day.opening_time?.slice(0, 5) ?? "19:00"}`
+    ? new Date(
+        period.opened_at,
+      )
+        .toLocaleString("sv-SE", {
+          timeZone: "Asia/Ho_Chi_Minh",
+        })
+        .slice(0, 16)
+    : `${period.scheduled_date}T${
+        day.opening_time?.slice(0, 5) ??
+        "19:00"
+      }`
 
-  const [winnerShareId, setWinnerShareId] = useState(
+  const [
+    winnerShareId,
+    setWinnerShareId,
+  ] = useState(
     period.winner_share_id ?? "",
   )
-  const [bidAmount, setBidAmount] = useState(
-    period.bid_amount ? formatMoneyInput(String(period.bid_amount)) : "",
+  const [bidAmount, setBidAmount] =
+    useState(
+      period.bid_amount
+        ? formatMoneyInput(
+            String(period.bid_amount),
+          )
+        : "",
+    )
+  const [openedAt, setOpenedAt] =
+    useState(defaultOpenedAt)
+  const [notes, setNotes] = useState(
+    period.notes ?? "",
   )
-  const [openedAt, setOpenedAt] = useState(defaultOpenedAt)
-  const [notes, setNotes] = useState(period.notes ?? "")
-  const [saving, setSaving] = useState(false)
+  const [saving, setSaving] =
+    useState(false)
   const [error, setError] = useState("")
 
-  const minBid = Number(day.minimum_bid_amount ?? 0)
-  const bidStep = Number(day.bid_step_amount ?? 0)
+  const minBid = Number(
+    day.minimum_bid_amount ?? 0,
+  )
+  const bidStep = Number(
+    day.bid_step_amount ?? 0,
+  )
 
   function validateBid(value: number) {
     if (value < minBid) {
       return `Giá thăm phải từ ${formatVND(minBid)} trở lên.`
     }
-    if (bidStep > 0 && (value - minBid) % bidStep !== 0) {
+
+    if (
+      bidStep > 0 &&
+      (value - minBid) % bidStep !== 0
+    ) {
       return `Giá thăm phải tăng theo bước ${formatVND(bidStep)} từ mức ${formatVND(minBid)}.`
     }
+
     return ""
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault()
     setError("")
 
@@ -1696,31 +1999,41 @@ function PeriodDialog({
       setError(bidError)
       return
     }
+
     if (!openedAt) {
-      setError("Ngày giờ khui là bắt buộc.")
+      setError(
+        "Ngày giờ khui là bắt buộc.",
+      )
       return
     }
 
     setSaving(true)
 
-    const openedAtIso = new Date(`${openedAt}:00+07:00`).toISOString()
+    const openedAtIso = new Date(
+      `${openedAt}:00+07:00`,
+    ).toISOString()
 
-    const { error: updateError } = await createClient()
-      .from("hui_periods")
-      .update({
-        winner_share_id: winnerShareId,
-        bid_amount: bid,
-        fee_amount: day.fee_amount,
-        opened_at: openedAtIso,
-        status: "completed",
-        notes: notes.trim() || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", period.id)
+    const { error: updateError } =
+      await createClient()
+        .from("hui_periods")
+        .update({
+          winner_share_id:
+            winnerShareId,
+          bid_amount: bid,
+          fee_amount: day.fee_amount,
+          opened_at: openedAtIso,
+          status: "completed",
+          notes: notes.trim() || null,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq("id", period.id)
 
     if (updateError) {
       console.error(updateError)
-      setError("Không thể lưu kết quả kỳ khui.")
+      setError(
+        "Không thể lưu kết quả kỳ khui.",
+      )
       setSaving(false)
       return
     }
@@ -1735,21 +2048,35 @@ function PeriodDialog({
       aria-modal="true"
       aria-labelledby="period-dialog-title"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          onClose()
+        }
       }}
     >
       <Card className="max-h-[92vh] w-full max-w-xl overflow-y-auto p-5">
         <div className="flex items-center justify-between">
           <div>
-            <h2 id="period-dialog-title" className="text-lg font-bold">
-              {isFinishedPeriod(period.status)
+            <h2
+              id="period-dialog-title"
+              className="text-lg font-bold"
+            >
+              {isFinishedPeriod(
+                period.status,
+              )
                 ? `Sửa kết quả kỳ ${period.period_number}`
                 : `Nhập kết quả kỳ ${period.period_number}`}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {day.code} • {day.name} • {formatDate(period.scheduled_date)}
+              {day.code} • {day.name} •{" "}
+              {formatDate(
+                period.scheduled_date,
+              )}
             </p>
           </div>
+
           <Button
             variant="ghost"
             size="icon"
@@ -1760,22 +2087,38 @@ function PeriodDialog({
           </Button>
         </div>
 
-        <form className="mt-5 flex flex-col gap-4" onSubmit={submit}>
+        <form
+          className="mt-5 flex flex-col gap-4"
+          onSubmit={submit}
+        >
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Chân hốt
             <select
               required
               className="h-9 rounded-md border border-input bg-background px-3 text-sm"
               value={winnerShareId}
-              onChange={(event) => setWinnerShareId(event.target.value)}
+              onChange={(event) =>
+                setWinnerShareId(
+                  event.target.value,
+                )
+              }
             >
-              <option value="">Chọn chân hốt</option>
+              <option value="">
+                Chọn chân hốt
+              </option>
               {eligibleShares.map((share) => {
-                const member = membersById.get(share.member_id)
+                const member =
+                  membersById.get(
+                    share.member_id,
+                  )
                 return (
-                  <option key={share.id} value={share.id}>
+                  <option
+                    key={share.id}
+                    value={share.id}
+                  >
                     Chân {share.share_number} —{" "}
-                    {member?.full_name ?? "Không rõ"}
+                    {member?.full_name ??
+                      "Không rõ"}
                   </option>
                 )
               })}
@@ -1790,9 +2133,15 @@ function PeriodDialog({
                 required
                 value={bidAmount}
                 onChange={(event) =>
-                  setBidAmount(formatMoneyInput(event.target.value))
+                  setBidAmount(
+                    formatMoneyInput(
+                      event.target.value,
+                    ),
+                  )
                 }
-                placeholder={`Từ ${formatMoneyInput(String(minBid))}đ`}
+                placeholder={`Từ ${formatMoneyInput(
+                  String(minBid),
+                )}đ`}
                 className="pr-10"
               />
               <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
@@ -1800,12 +2149,15 @@ function PeriodDialog({
               </span>
             </div>
             <span className="text-xs font-normal text-muted-foreground">
-              Tối thiểu {formatVND(minBid)}, bước {formatVND(bidStep)}.
+              Tối thiểu {formatVND(minBid)},
+              bước {formatVND(bidStep)}.
             </span>
           </label>
 
           <Card className="flex items-center justify-between gap-4 p-3">
-            <p className="text-sm font-medium">Tiền thảo</p>
+            <p className="text-sm font-medium">
+              Tiền thảo
+            </p>
             <p className="shrink-0 font-semibold">
               {formatVND(day.fee_amount)}
             </p>
@@ -1817,7 +2169,11 @@ function PeriodDialog({
               type="datetime-local"
               required
               value={openedAt}
-              onChange={(event) => setOpenedAt(event.target.value)}
+              onChange={(event) =>
+                setOpenedAt(
+                  event.target.value,
+                )
+              }
             />
           </label>
 
@@ -1826,33 +2182,53 @@ function PeriodDialog({
             <textarea
               className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={notes}
-              onChange={(event) => setNotes(event.target.value)}
+              onChange={(event) =>
+                setNotes(event.target.value)
+              }
               placeholder="Ghi chú nếu kỳ này có điều chỉnh đặc biệt..."
             />
           </label>
 
           {error && (
-            <p className="text-sm text-destructive" role="alert">
+            <p
+              className="text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </p>
           )}
 
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+            >
               Hủy
             </Button>
-            <Button type="submit" disabled={saving}>
-              {saving && <LoaderCircle className="size-4 animate-spin" />}
-              {isFinishedPeriod(period.status)
+            <Button
+              type="submit"
+              disabled={saving}
+            >
+              {saving && (
+                <LoaderCircle className="size-4 animate-spin" />
+              )}
+              {isFinishedPeriod(
+                period.status,
+              )
                 ? "Lưu chỉnh sửa"
                 : "Chốt kỳ"}
             </Button>
           </div>
 
-          {isFinishedPeriod(period.status) && (
+          {isFinishedPeriod(
+            period.status,
+          ) && (
             <p className="text-xs text-muted-foreground">
-              Bạn có thể sửa lại người hốt, giá thăm, ngày giờ và ghi chú
-              nếu trước đó nhập sai. Tiền thảo luôn cố định theo dây.
+              Bạn có thể sửa lại người hốt,
+              giá thăm, ngày giờ và ghi chú
+              nếu trước đó nhập sai. Tiền
+              thảo luôn cố định theo dây.
             </p>
           )}
         </form>
@@ -1876,31 +2252,65 @@ function DayDetail({
   onEdit: () => void
   onDataChanged: () => Promise<void>
 }) {
-  const [editingShare, setEditingShare] = useState<
-    HuiShareRow | null | undefined
-  >(undefined)
-  const [editingPeriod, setEditingPeriod] = useState<
-    HuiPeriodRow | undefined
-  >(undefined)
+  const [editingShare, setEditingShare] =
+    useState<
+      HuiShareRow | null | undefined
+    >(undefined)
 
-  const completedPeriods = day.periods.filter((period) =>
-    isFinishedPeriod(period.status),
+  const [editingPeriod, setEditingPeriod] =
+    useState<
+      HuiPeriodRow | undefined
+    >(undefined)
+
+  const completedPeriods =
+    day.periods.filter((period) =>
+      isFinishedPeriod(period.status),
+    )
+
+  const totalPeriods = Math.max(
+    day.total_shares,
+    day.periods.length,
+    1,
   )
-  const totalPeriods = Math.max(day.total_shares, day.periods.length, 1)
+
   const progress = Math.min(
     100,
-    Math.round((completedPeriods.length / totalPeriods) * 100),
+    Math.round(
+      (completedPeriods.length /
+        totalPeriods) *
+        100,
+    ),
   )
-  const nextPeriod = day.periods
-    .filter((period) => period.status === "scheduled")
-    .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))[0]
 
-  const winnerMember = (period: HuiPeriodRow) => {
-    if (!period.winner_share_id) return null
-    const share = day.shares.find(
-      (item) => item.id === period.winner_share_id,
+  const nextPeriod = day.periods
+    .filter(
+      (period) =>
+        period.status === "scheduled",
     )
-    return share ? membersById.get(share.member_id) ?? null : null
+    .sort((a, b) =>
+      a.scheduled_date.localeCompare(
+        b.scheduled_date,
+      ),
+    )[0]
+
+  const winnerMember = (
+    period: HuiPeriodRow,
+  ) => {
+    if (!period.winner_share_id) {
+      return null
+    }
+
+    const share = day.shares.find(
+      (item) =>
+        item.id ===
+        period.winner_share_id,
+    )
+
+    return share
+      ? membersById.get(
+          share.member_id,
+        ) ?? null
+      : null
   }
 
   return (
@@ -1915,21 +2325,42 @@ function DayDetail({
           >
             <ArrowLeft className="size-4" />
           </Button>
+
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="font-mono">
+              <Badge
+                variant="outline"
+                className="font-mono"
+              >
                 {day.code ?? "Chưa có mã"}
               </Badge>
-              <h1 className="text-lg font-bold leading-tight">{day.name}</h1>
+              <h1 className="text-lg font-bold leading-tight">
+                {day.name}
+              </h1>
             </div>
             <p className="text-xs text-muted-foreground">
-              {formatVND(day.contribution_amount)}/chân • {day.total_shares} chân
-              • {frequencyLabel(day.frequency_type, day.frequency_value)} •{" "}
-              {formatTime(day.opening_time)}
+              {formatVND(
+                day.contribution_amount,
+              )}
+              /chân • {day.total_shares} chân
+              •{" "}
+              {frequencyLabel(
+                day.frequency_type,
+                day.frequency_value,
+              )}{" "}
+              •{" "}
+              {formatTime(
+                day.opening_time,
+              )}
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={onEdit}>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onEdit}
+        >
           <Pencil className="size-4" />
           Sửa dây
         </Button>
@@ -1937,21 +2368,36 @@ function DayDetail({
 
       <Tabs defaultValue="tongquan">
         <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="tongquan" className="text-xs">
+          <TabsTrigger
+            value="tongquan"
+            className="text-xs"
+          >
             Tổng quan
           </TabsTrigger>
-          <TabsTrigger value="chan" className="text-xs">
+          <TabsTrigger
+            value="chan"
+            className="text-xs"
+          >
             Chân hụi
           </TabsTrigger>
-          <TabsTrigger value="lich" className="text-xs">
+          <TabsTrigger
+            value="lich"
+            className="text-xs"
+          >
             Lịch kỳ
           </TabsTrigger>
-          <TabsTrigger value="lichsu" className="text-xs">
+          <TabsTrigger
+            value="lichsu"
+            className="text-xs"
+          >
             Lịch sử
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="tongquan" className="mt-3 space-y-3">
+        <TabsContent
+          value="tongquan"
+          className="mt-3 space-y-3"
+        >
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             {[
               {
@@ -1960,85 +2406,142 @@ function DayDetail({
               },
               {
                 label: "Mệnh giá",
-                value: formatVND(day.contribution_amount),
+                value: formatVND(
+                  day.contribution_amount,
+                ),
               },
-              { label: "Tiền thảo", value: formatVND(day.fee_amount) },
+              {
+                label: "Tiền thảo",
+                value: formatVND(
+                  day.fee_amount,
+                ),
+              },
               {
                 label: "Thăm tối thiểu",
-                value: formatVND(day.minimum_bid_amount),
+                value: formatVND(
+                  day.minimum_bid_amount,
+                ),
               },
               {
                 label: "Bước thăm",
-                value: formatVND(day.bid_step_amount),
+                value: formatVND(
+                  day.bid_step_amount,
+                ),
               },
               {
                 label: "Kỳ tiếp",
                 value: nextPeriod
-                  ? `${formatDate(nextPeriod.scheduled_date)} ${formatTime(day.opening_time)}`
+                  ? `${formatDate(
+                      nextPeriod.scheduled_date,
+                    )} ${formatTime(
+                      day.opening_time,
+                    )}`
                   : "Chưa có",
               },
             ].map((item) => (
-              <Card key={item.label} className="p-3">
-                <p className="text-xs text-muted-foreground">{item.label}</p>
-                <p className="mt-0.5 text-base font-semibold">{item.value}</p>
+              <Card
+                key={item.label}
+                className="p-3"
+              >
+                <p className="text-xs text-muted-foreground">
+                  {item.label}
+                </p>
+                <p className="mt-0.5 text-base font-semibold">
+                  {item.value}
+                </p>
               </Card>
             ))}
           </div>
 
           <Card className="p-4">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-medium">Tiến độ khui</span>
-              <span className="text-sm text-muted-foreground">{progress}%</span>
+              <span className="text-sm font-medium">
+                Tiến độ khui
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {progress}%
+              </span>
             </div>
-            <Progress value={progress} className="h-3" />
+            <Progress
+              value={progress}
+              className="h-3"
+            />
           </Card>
 
           <div className="grid grid-cols-3 gap-3 text-center">
             <Card className="p-3">
               <p className="text-2xl font-bold text-status-green-fg">
                 {
-                  day.shares.filter((share) => share.status === "active")
-                    .length
+                  day.shares.filter(
+                    (share) =>
+                      share.status ===
+                      "active",
+                  ).length
                 }
               </p>
-              <p className="text-xs text-muted-foreground">Chân hoạt động</p>
+              <p className="text-xs text-muted-foreground">
+                Chân hoạt động
+              </p>
             </Card>
+
             <Card className="p-3">
               <p className="text-2xl font-bold text-status-red-fg">
                 {
-                  day.shares.filter((share) => share.status !== "active")
-                    .length
+                  day.shares.filter(
+                    (share) =>
+                      share.status !==
+                      "active",
+                  ).length
                 }
               </p>
-              <p className="text-xs text-muted-foreground">Chân tạm ngưng</p>
+              <p className="text-xs text-muted-foreground">
+                Chân tạm ngưng
+              </p>
             </Card>
+
             <Card className="p-3">
               <p className="text-2xl font-bold text-primary">
                 {
                   new Set(
                     completedPeriods
-                      .map((period) => period.winner_share_id)
+                      .map(
+                        (period) =>
+                          period.winner_share_id,
+                      )
                       .filter(Boolean),
                   ).size
                 }
               </p>
-              <p className="text-xs text-muted-foreground">Đã hốt</p>
+              <p className="text-xs text-muted-foreground">
+                Đã hốt
+              </p>
             </Card>
           </div>
         </TabsContent>
 
-        <TabsContent value="chan" className="mt-3 space-y-3">
+        <TabsContent
+          value="chan"
+          className="mt-3 space-y-3"
+        >
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-medium">Danh sách chân hụi</p>
+              <p className="font-medium">
+                Danh sách chân hụi
+              </p>
               <p className="text-xs text-muted-foreground">
-                Đã gán {day.shares.length}/{day.total_shares} chân
+                Đã gán {day.shares.length}/
+                {day.total_shares} chân
               </p>
             </div>
             <Button
               size="sm"
-              onClick={() => setEditingShare(null)}
-              disabled={day.shares.length >= day.total_shares}
+              onClick={() =>
+                setEditingShare(null)
+              }
+              disabled={
+                day.shares.length >=
+                day.total_shares
+              }
             >
               <Plus className="size-4" />
               Thêm chân
@@ -2050,12 +2553,19 @@ function DayDetail({
               <div className="flex flex-col items-center gap-3 py-10 text-center">
                 <Users className="size-8 text-muted-foreground" />
                 <div>
-                  <p className="font-medium">Dây này chưa có chân hụi</p>
+                  <p className="font-medium">
+                    Dây này chưa có chân hụi
+                  </p>
                   <p className="text-sm text-muted-foreground">
-                    Chọn hụi viên và gán vào từng số chân.
+                    Chọn hụi viên và gán vào
+                    từng số chân.
                   </p>
                 </div>
-                <Button onClick={() => setEditingShare(null)}>
+                <Button
+                  onClick={() =>
+                    setEditingShare(null)
+                  }
+                >
                   <Plus className="size-4" />
                   Thêm chân đầu tiên
                 </Button>
@@ -2086,32 +2596,53 @@ function DayDetail({
                     </thead>
                     <tbody className="divide-y divide-border">
                       {[...day.shares]
-                        .sort((a, b) => a.share_number - b.share_number)
+                        .sort(
+                          (a, b) =>
+                            a.share_number -
+                            b.share_number,
+                        )
                         .map((share) => {
-                          const member = membersById.get(share.member_id)
-                          const wonPeriod = completedPeriods.find(
-                            (period) => period.winner_share_id === share.id,
-                          )
+                          const member =
+                            membersById.get(
+                              share.member_id,
+                            )
+                          const wonPeriod =
+                            completedPeriods.find(
+                              (period) =>
+                                period.winner_share_id ===
+                                share.id,
+                            )
+
                           return (
-                            <tr key={share.id} className="hover:bg-muted/30">
+                            <tr
+                              key={share.id}
+                              className="hover:bg-muted/30"
+                            >
                               <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                                {share.share_number}
+                                {
+                                  share.share_number
+                                }
                               </td>
                               <td className="px-4 py-2.5 font-medium">
-                                {member?.full_name ?? "Không rõ"}
+                                {member?.full_name ??
+                                  "Không rõ"}
                               </td>
                               <td className="px-4 py-2.5 text-muted-foreground">
-                                {member?.phone ?? "—"}
+                                {member?.phone ??
+                                  "—"}
                               </td>
                               <td className="px-4 py-2.5">
                                 <Badge variant="outline">
-                                  {share.status === "active"
+                                  {share.status ===
+                                  "active"
                                     ? "Hoạt động"
                                     : "Tạm ngưng"}
                                 </Badge>
                               </td>
                               <td className="px-4 py-2.5">
-                                {wonPeriod ? "Đã hốt" : "Chưa"}
+                                {wonPeriod
+                                  ? "Đã hốt"
+                                  : "Chưa"}
                               </td>
                               <td className="px-4 py-2.5 text-muted-foreground">
                                 {wonPeriod
@@ -2122,7 +2653,11 @@ function DayDetail({
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => setEditingShare(share)}
+                                  onClick={() =>
+                                    setEditingShare(
+                                      share,
+                                    )
+                                  }
                                 >
                                   <Pencil className="size-4" />
                                   Sửa
@@ -2137,12 +2672,23 @@ function DayDetail({
 
                 <div className="divide-y divide-border md:hidden">
                   {[...day.shares]
-                    .sort((a, b) => a.share_number - b.share_number)
+                    .sort(
+                      (a, b) =>
+                        a.share_number -
+                        b.share_number,
+                    )
                     .map((share) => {
-                      const member = membersById.get(share.member_id)
-                      const wonPeriod = completedPeriods.find(
-                        (period) => period.winner_share_id === share.id,
-                      )
+                      const member =
+                        membersById.get(
+                          share.member_id,
+                        )
+                      const wonPeriod =
+                        completedPeriods.find(
+                          (period) =>
+                            period.winner_share_id ===
+                            share.id,
+                        )
+
                       return (
                         <div
                           key={share.id}
@@ -2150,14 +2696,19 @@ function DayDetail({
                         >
                           <div className="flex min-w-0 items-center gap-3">
                             <span className="w-6 shrink-0 font-mono text-xs text-muted-foreground">
-                              {share.share_number}
+                              {
+                                share.share_number
+                              }
                             </span>
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium">
-                                {member?.full_name ?? "Không rõ"}
+                                {member?.full_name ??
+                                  "Không rõ"}
                               </p>
                               <p className="text-xs text-muted-foreground">
-                                {member?.phone ?? "Chưa có SĐT"} •{" "}
+                                {member?.phone ??
+                                  "Chưa có SĐT"}{" "}
+                                •{" "}
                                 {wonPeriod
                                   ? `Hốt kỳ ${wonPeriod.period_number}`
                                   : "Chưa hốt"}
@@ -2167,7 +2718,11 @@ function DayDetail({
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => setEditingShare(share)}
+                            onClick={() =>
+                              setEditingShare(
+                                share,
+                              )
+                            }
                             aria-label={`Sửa chân ${share.share_number}`}
                           >
                             <Pencil className="size-4" />
@@ -2180,7 +2735,8 @@ function DayDetail({
             )}
           </Card>
 
-          {day.shares.length >= day.total_shares && (
+          {day.shares.length >=
+            day.total_shares && (
             <p className="text-xs text-muted-foreground">
               Dây đã đủ {day.total_shares} chân.
             </p>
@@ -2191,7 +2747,9 @@ function DayDetail({
               day={day}
               share={editingShare}
               members={members}
-              onClose={() => setEditingShare(undefined)}
+              onClose={() =>
+                setEditingShare(undefined)
+              }
               onSaved={async () => {
                 setEditingShare(undefined)
                 await onDataChanged()
@@ -2200,7 +2758,10 @@ function DayDetail({
           )}
         </TabsContent>
 
-        <TabsContent value="lich" className="mt-3">
+        <TabsContent
+          value="lich"
+          className="mt-3"
+        >
           <Card className="overflow-hidden">
             {day.periods.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
@@ -2231,135 +2792,219 @@ function DayDetail({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {day.periods.map((period) => {
-                        const winner = winnerMember(period)
-                        return (
-                          <tr key={period.id} className="hover:bg-muted/30">
-                            <td className="px-4 py-2.5 font-mono font-semibold">
-                              {period.period_number}
-                            </td>
-                            <td className="px-4 py-2.5 text-muted-foreground">
-                              {formatDate(period.scheduled_date)} •{" "}
-                              {period.scheduled_at
-                                ? new Date(period.scheduled_at).toLocaleTimeString(
-                                    "vi-VN",
-                                    {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                      timeZone: "Asia/Ho_Chi_Minh",
-                                    },
-                                  )
-                                : formatTime(day.opening_time)}
-                            </td>
-                            <td className="px-4 py-2.5 font-medium">
-                              {winner?.full_name ?? "—"}
-                            </td>
-                            <td className="px-4 py-2.5 text-primary">
-                              {period.winner_share_id
-                                ? formatVND(period.bid_amount)
-                                : "—"}
-                            </td>
-                            <td className="px-4 py-2.5 text-muted-foreground">
-                              {formatVND(period.fee_amount)}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Badge variant="outline">
-                                {periodStatusLabel(period.status)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditingPeriod(period)}
-                              >
-                                {isFinishedPeriod(period.status) ? (
-                                  <Pencil className="size-4" />
-                                ) : (
-                                  <CheckCircle2 className="size-4" />
+                      {day.periods.map(
+                        (period) => {
+                          const winner =
+                            winnerMember(
+                              period,
+                            )
+
+                          return (
+                            <tr
+                              key={period.id}
+                              className="hover:bg-muted/30"
+                            >
+                              <td className="px-4 py-2.5 font-mono font-semibold">
+                                {
+                                  period.period_number
+                                }
+                              </td>
+                              <td className="px-4 py-2.5 text-muted-foreground">
+                                {formatDate(
+                                  period.scheduled_date,
+                                )}{" "}
+                                •{" "}
+                                {period.scheduled_at
+                                  ? new Date(
+                                      period.scheduled_at,
+                                    ).toLocaleTimeString(
+                                      "vi-VN",
+                                      {
+                                        hour: "2-digit",
+                                        minute:
+                                          "2-digit",
+                                        timeZone:
+                                          "Asia/Ho_Chi_Minh",
+                                      },
+                                    )
+                                  : formatTime(
+                                      day.opening_time,
+                                    )}
+                              </td>
+                              <td className="px-4 py-2.5 font-medium">
+                                {winner?.full_name ??
+                                  "—"}
+                              </td>
+                              <td className="px-4 py-2.5 text-primary">
+                                {period.winner_share_id
+                                  ? formatVND(
+                                      period.bid_amount,
+                                    )
+                                  : "—"}
+                              </td>
+                              <td className="px-4 py-2.5 text-muted-foreground">
+                                {formatVND(
+                                  period.fee_amount,
                                 )}
-                                {isFinishedPeriod(period.status)
-                                  ? "Sửa"
-                                  : "Nhập kết quả"}
-                              </Button>
-                            </td>
-                          </tr>
-                        )
-                      })}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <Badge variant="outline">
+                                  {periodStatusLabel(
+                                    period.status,
+                                  )}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setEditingPeriod(
+                                      period,
+                                    )
+                                  }
+                                >
+                                  {isFinishedPeriod(
+                                    period.status,
+                                  ) ? (
+                                    <Pencil className="size-4" />
+                                  ) : (
+                                    <CheckCircle2 className="size-4" />
+                                  )}
+                                  {isFinishedPeriod(
+                                    period.status,
+                                  )
+                                    ? "Sửa"
+                                    : "Nhập kết quả"}
+                                </Button>
+                              </td>
+                            </tr>
+                          )
+                        },
+                      )}
                     </tbody>
                   </table>
                 </div>
 
                 <div className="divide-y divide-border md:hidden">
-                  {day.periods.map((period) => {
-                    const winner = winnerMember(period)
-                    return (
-                      <button
-                        type="button"
-                        key={period.id}
-                        onClick={() => setEditingPeriod(period)}
-                        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-muted/30"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="flex size-8 items-center justify-center rounded-full bg-secondary">
-                            <Calendar className="size-3.5 text-muted-foreground" />
+                  {day.periods.map(
+                    (period) => {
+                      const winner =
+                        winnerMember(period)
+
+                      return (
+                        <button
+                          type="button"
+                          key={period.id}
+                          onClick={() =>
+                            setEditingPeriod(
+                              period,
+                            )
+                          }
+                          className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-muted/30"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="flex size-8 items-center justify-center rounded-full bg-secondary">
+                              <Calendar className="size-3.5 text-muted-foreground" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold">
+                                Kỳ{" "}
+                                {
+                                  period.period_number
+                                }
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatDate(
+                                  period.scheduled_date,
+                                )}{" "}
+                                •{" "}
+                                {formatTime(
+                                  day.opening_time,
+                                )}{" "}
+                                •{" "}
+                                {winner?.full_name ??
+                                  "Chưa có người hốt"}
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-sm font-semibold">
-                              Kỳ {period.period_number}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {formatDate(period.scheduled_date)} •{" "}
-                              {formatTime(day.opening_time)} •{" "}
-                              {winner?.full_name ?? "Chưa có người hốt"}
-                            </p>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">
+                              {periodStatusLabel(
+                                period.status,
+                              )}
+                            </Badge>
+                            <Pencil className="size-4 text-muted-foreground" />
                           </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">
-                            {periodStatusLabel(period.status)}
-                          </Badge>
-                          <Pencil className="size-4 text-muted-foreground" />
-                        </div>
-                      </button>
-                    )
-                  })}
+                        </button>
+                      )
+                    },
+                  )}
                 </div>
               </>
             )}
           </Card>
         </TabsContent>
 
-        <TabsContent value="lichsu" className="mt-3">
+        <TabsContent
+          value="lichsu"
+          className="mt-3"
+        >
           <Card className="overflow-hidden">
             <div className="divide-y divide-border">
               {[...completedPeriods]
-                .sort((a, b) => b.period_number - a.period_number)
+                .sort(
+                  (a, b) =>
+                    b.period_number -
+                    a.period_number,
+                )
                 .map((period) => {
-                  const winner = winnerMember(period)
+                  const winner =
+                    winnerMember(period)
+
                   return (
-                    <div key={period.id} className="px-4 py-3">
+                    <div
+                      key={period.id}
+                      className="px-4 py-3"
+                    >
                       <div className="flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold">
-                            Kỳ {period.period_number} —{" "}
-                            {winner?.full_name ?? "Chưa xác định"}
+                            Kỳ{" "}
+                            {
+                              period.period_number
+                            }{" "}
+                            —{" "}
+                            {winner?.full_name ??
+                              "Chưa xác định"}
                           </p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            Ngày {formatDate(period.scheduled_date)} • Tiền bỏ:{" "}
-                            {formatVND(period.bid_amount)} • Thảo:{" "}
-                            {formatVND(period.fee_amount)}
+                            Ngày{" "}
+                            {formatDate(
+                              period.scheduled_date,
+                            )}{" "}
+                            • Tiền bỏ:{" "}
+                            {formatVND(
+                              period.bid_amount,
+                            )}{" "}
+                            • Thảo:{" "}
+                            {formatVND(
+                              period.fee_amount,
+                            )}
                           </p>
                         </div>
                         <Badge variant="secondary">
-                          {periodStatusLabel(period.status)}
+                          {periodStatusLabel(
+                            period.status,
+                          )}
                         </Badge>
                       </div>
                     </div>
                   )
                 })}
 
-              {completedPeriods.length === 0 && (
+              {completedPeriods.length ===
+                0 && (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   Chưa có kỳ nào được khui.
                 </p>
@@ -2374,7 +3019,9 @@ function DayDetail({
           day={day}
           period={editingPeriod}
           membersById={membersById}
-          onClose={() => setEditingPeriod(undefined)}
+          onClose={() =>
+            setEditingPeriod(undefined)
+          }
           onSaved={async () => {
             setEditingPeriod(undefined)
             await onDataChanged()
