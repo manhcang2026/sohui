@@ -11,7 +11,6 @@ import {
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import {
-  authPasswordFromPin,
   displayVietnamPhone,
   isFourDigitPin,
   normalizeVietnamPhone,
@@ -175,15 +174,38 @@ function ChangePinCard({
     if (pin !== confirmPin) return onError("Hai lần nhập mã chưa giống nhau.")
 
     setSaving(true)
-    const { error } = await createClient().auth.updateUser({
-      password: authPasswordFromPin(pin),
-    })
-    setSaving(false)
 
-    if (error) return onError("Không thể đổi mã 4 số.")
-    setPin("")
-    setConfirmPin("")
-    onChanged("Đã đổi mã đăng nhập 4 số.")
+    try {
+      const { data } = await createClient().auth.getSession()
+      const accessToken = data.session?.access_token ?? ""
+
+      const response = await fetch("/api/account/change-pin", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ pin }),
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        onError(result.error ?? "Không thể đổi mã 4 số.")
+        return
+      }
+
+      setPin("")
+      setConfirmPin("")
+      onChanged("Đã đổi mã đăng nhập 4 số.")
+    } catch (caught) {
+      onError(
+        caught instanceof Error
+          ? caught.message
+          : "Không thể đổi mã 4 số.",
+      )
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -391,7 +413,6 @@ function SuperAdminUsers({
           >
             <option value="member">Hụi viên</option>
             <option value="admin">Admin vận hành</option>
-            <option value="super_admin">Super admin</option>
           </select>
         </label>
 
@@ -435,7 +456,7 @@ function SuperAdminUsers({
                     <select
                       className="h-9 rounded-md border bg-background px-2"
                       value={user.role}
-                      disabled={workingId === user.auth_user_id}
+                      disabled={workingId === user.auth_user_id || user.role === "super_admin"}
                       onChange={(e) => void updateUser(user, { role: e.target.value as AppRole })}
                     >
                       <option value="super_admin">Super admin</option>
@@ -447,7 +468,7 @@ function SuperAdminUsers({
                     <select
                       className="h-9 min-w-[180px] rounded-md border bg-background px-2"
                       value={user.member_id ?? ""}
-                      disabled={workingId === user.auth_user_id}
+                      disabled={workingId === user.auth_user_id || user.role === "super_admin"}
                       onChange={(e) => void updateUser(user, { member_id: e.target.value || null })}
                     >
                       <option value="">Không liên kết</option>
@@ -459,7 +480,8 @@ function SuperAdminUsers({
                   <td className="px-3 py-3">
                     <button
                       type="button"
-                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium"
+                      disabled={user.role === "super_admin" || workingId === user.auth_user_id}
+                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void updateUser(user, { is_active: !user.is_active })}
                     >
                       {user.is_active ? "Hoạt động" : "Khóa"}
