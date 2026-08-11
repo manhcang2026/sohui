@@ -76,8 +76,6 @@ type HuiPeriodRow = {
   winner_share_id: string | null
   bid_amount: number
   fee_amount: number
-  minimum_bid_amount: number
-  bid_step_amount: number
   status: string
   notes: string | null
   created_at: string
@@ -337,7 +335,7 @@ export function DayHuiPage() {
       supabase
         .from("hui_periods")
         .select(
-          "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, minimum_bid_amount, bid_step_amount, status, notes, created_at, updated_at",
+          "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes, created_at, updated_at",
         )
         .order("period_number"),
       supabase.from("members").select("id, full_name, phone"),
