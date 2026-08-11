@@ -17,7 +17,7 @@ import { Card } from "@/components/ui/card"
 
 type Profile = {
   auth_user_id: string
-  email: string
+  email: string | null
   display_name: string | null
   role: "member"
   member_id: string
@@ -93,6 +93,7 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
   const [payments, setPayments] = useState<PaymentRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
   const [showPin, setShowPin] = useState(false)
 
   useEffect(() => {
@@ -101,6 +102,7 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
 
   async function loadData() {
     setLoading(true)
+    setError("")
     const supabase = createClient()
 
     const [
@@ -139,6 +141,21 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
         .from("receipt_payments")
         .select("id, receipt_id, direction, amount, status"),
     ])
+
+    const firstError =
+      memberResult.error ??
+      sharesResult.error ??
+      groupsResult.error ??
+      periodsResult.error ??
+      receiptsResult.error ??
+      paymentsResult.error
+
+    if (firstError) {
+      console.error(firstError)
+      setError("Không thể tải đầy đủ dữ liệu của bạn. Vui lòng thử lại.")
+      setLoading(false)
+      return
+    }
 
     setMember((memberResult.data as MemberRow | null) ?? null)
     setShares((sharesResult.data ?? []) as ShareRow[])
@@ -198,6 +215,23 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     )
   }
 
+  if (error) {
+    return (
+      <div className="mx-auto max-w-xl p-4">
+        <Card className="p-6 text-center">
+          <p className="font-medium text-destructive">{error}</p>
+          <Button
+            className="mt-3"
+            variant="outline"
+            onClick={() => void loadData()}
+          >
+            Thử lại
+          </Button>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b bg-card">
@@ -205,7 +239,7 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
           <div>
             <p className="text-xs text-muted-foreground">Sổ hụi của tôi</p>
             <h1 className="font-bold">
-              {member?.full_name ?? profile.display_name ?? profile.email}
+              {member?.full_name ?? profile.display_name ?? profile.email ?? "Hụi viên"}
             </h1>
           </div>
 
