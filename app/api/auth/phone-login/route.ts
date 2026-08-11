@@ -55,6 +55,36 @@ export async function POST(request: NextRequest) {
 
     const admin = adminClient()
 
+    const { data: lockRow, error: lockError } = await admin
+      .from("login_pin_attempts")
+      .select("locked_until")
+      .eq("phone", phone)
+      .maybeSingle()
+
+    if (lockError) {
+      console.error("login lock check:", lockError)
+    }
+
+    if (
+      lockRow?.locked_until &&
+      new Date(lockRow.locked_until).getTime() > Date.now()
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Bạn đã nhập sai nhiều lần. Tài khoản tạm khóa 15 phút.",
+        },
+        { status: 429 },
+      )
+    }
+
+    async function registerFailure() {
+      const { error } = await admin.rpc("register_pin_failure", {
+        p_phone: phone,
+      })
+      if (error) console.error("register_pin_failure:", error)
+    }
+
     // Dùng app_users làm bảng ánh xạ SĐT -> Supabase Auth user.
     const { data: profile, error: profileError } = await admin
       .from("app_users")
@@ -68,6 +98,7 @@ export async function POST(request: NextRequest) {
       !profile.is_active ||
       !profile.auth_user_id
     ) {
+      await registerFailure()
       return NextResponse.json(
         { error: "Số điện thoại hoặc mã 4 số không đúng." },
         { status: 401 },
@@ -80,6 +111,7 @@ export async function POST(request: NextRequest) {
     const authUser = authData.user
 
     if (authUserError || !authUser?.email) {
+      await registerFailure()
       return NextResponse.json(
         { error: "Số điện thoại hoặc mã 4 số không đúng." },
         { status: 401 },
@@ -118,10 +150,21 @@ export async function POST(request: NextRequest) {
     }
 
     if (signIn.error || !signIn.data.session) {
+      await registerFailure()
       return NextResponse.json(
         { error: "Số điện thoại hoặc mã 4 số không đúng." },
         { status: 401 },
       )
+    }
+
+    const { error: clearError } = await admin.rpc(
+      "clear_pin_failures",
+      {
+        p_phone: phone,
+      },
+    )
+    if (clearError) {
+      console.error("clear_pin_failures:", clearError)
     }
 
     // Chỉ trả token phiên; tuyệt đối không trả email Auth kỹ thuật.
