@@ -555,14 +555,17 @@ export function CanDoiPage() {
   ) {
     if (item.settled) return
 
-    const expected = [...item.memberNets.entries()].filter(([, net]) => net !== 0)
+    const expected = [...item.memberNets.entries()].filter(
+      ([, net]) => net !== 0,
+    )
+
     if (expected.length === 0) {
       window.alert("Kỳ này không có khoản thu/chi để xác nhận.")
       return
     }
 
     const ok = window.confirm(
-      `Đánh dấu ĐÃ THU/CHI ĐỦ toàn bộ kỳ ${item.period.period_number} của ${item.group.name} ngày ${item.period.scheduled_date}?\n\nThao tác này sẽ ghi nhận đủ tiền cho tất cả hụi viên của riêng kỳ này.`,
+      `Đánh dấu ĐÃ THU/CHI ĐỦ toàn bộ kỳ ${item.period.period_number} của ${item.group.name} ngày ${item.period.scheduled_date}?\n\nToàn bộ kỳ sẽ được ghi trong một transaction. Nếu có lỗi, không ai bị ghi nhận nửa chừng.`,
     )
     if (!ok) return
 
@@ -572,105 +575,23 @@ export function CanDoiPage() {
     try {
       const supabase = createClient()
 
-      for (const [memberId, net] of expected) {
-        const direction = net > 0 ? "collect" : "pay"
-        const amount = Math.abs(net)
-
-        const { data: receipt, error: receiptError } = await supabase
-          .from("hui_receipts")
-          .upsert(
-            {
-              member_id: memberId,
-              receipt_date: item.period.scheduled_date,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "member_id,receipt_date" },
-          )
-          .select("id, status")
-          .single()
-
-        if (receiptError || !receipt) throw receiptError
-
-        if (receipt.status === "cancelled") {
-          const { error: reopenError } = await supabase
-            .from("hui_receipts")
-            .update({
-              status: "open",
-              cancelled_at: null,
-              cancel_reason: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", receipt.id)
-
-          if (reopenError) throw reopenError
-        }
-
-        const { data: oldPayments, error: oldPaymentsError } = await supabase
-          .from("receipt_payments")
-          .select("id, direction, amount, status")
-          .eq("receipt_id", receipt.id)
-          .eq("source_period_id", item.period.id)
-          .eq("status", "active")
-
-        if (oldPaymentsError) throw oldPaymentsError
-
-        const exact = (oldPayments ?? []).find(
-          (payment) =>
-            payment.direction === direction &&
-            Number(payment.amount) === amount,
-        )
-
-        if (exact && (oldPayments ?? []).length === 1) {
-          continue
-        }
-
-        if ((oldPayments ?? []).length > 0) {
-          const ids = (oldPayments ?? []).map((payment) => payment.id)
-          const { error: cancelOldError } = await supabase
-            .from("receipt_payments")
-            .update({
-              status: "cancelled",
-              cancelled_at: new Date().toISOString(),
-              cancel_reason: "Cập nhật lại dữ liệu chốt nhanh của kỳ",
-              updated_at: new Date().toISOString(),
-            })
-            .in("id", ids)
-
-          if (cancelOldError) throw cancelOldError
-        }
-
-        const { error: paymentError } = await supabase
-          .from("receipt_payments")
-          .insert({
-            receipt_id: receipt.id,
-            direction,
-            amount,
-            method: "other",
-            note: `Dữ liệu cũ - xác nhận đủ kỳ ${item.period.period_number} - ${item.group.name}`,
-            source_period_id: item.period.id,
-          })
-
-        if (paymentError) throw paymentError
-      }
-
-      await supabase.from("audit_logs").insert({
-        entity_type: "hui_period",
-        entity_id: item.period.id,
-        action: "bulk_settle_period",
-        after_data: {
-          group_id: item.group.id,
-          period_number: item.period.period_number,
-          scheduled_date: item.period.scheduled_date,
-          member_count: expected.length,
+      const { data, error } = await supabase.rpc(
+        "settle_hui_period_atomic",
+        {
+          p_period_id: item.period.id,
         },
-        reason: "Đánh dấu dữ liệu cũ đã thu/chi đủ theo kỳ",
-      })
+      )
 
+      if (error) throw error
+
+      console.log("settle_hui_period_atomic:", data)
       await loadData()
     } catch (caught) {
       console.error(caught)
       setError(
-        "Không thể đánh dấu kỳ đã thu/chi đủ. Kiểm tra bạn đã chạy SQL bổ sung source_period_id.",
+        caught instanceof Error
+          ? `Không thể chốt đủ kỳ: ${caught.message}`
+          : "Không thể chốt đủ kỳ.",
       )
     } finally {
       setBulkWorkingPeriodId(null)
