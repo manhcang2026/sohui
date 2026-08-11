@@ -11,6 +11,7 @@ import {
   WalletCards,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
+import { calculateGroupPerformance } from "@/lib/hui-performance"
 import { AccountSecurity } from "@/components/account/account-security"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -32,6 +33,7 @@ type MemberRow = {
 type ShareRow = {
   id: string
   group_id: string
+  member_id: string
   share_number: number
   status: string
 }
@@ -95,6 +97,7 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [showPin, setShowPin] = useState(false)
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null)
 
   useEffect(() => {
     void loadData()
@@ -120,7 +123,7 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
         .single(),
       supabase
         .from("hui_shares")
-        .select("id, group_id, share_number, status"),
+        .select("id, group_id, member_id, share_number, status"),
       supabase
         .from("hui_groups")
         .select(
@@ -200,6 +203,27 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
       paid,
     }
   }, [payments, periods, shares])
+
+  const performanceByGroup = useMemo(() => {
+    const map = new Map<
+      string,
+      ReturnType<typeof calculateGroupPerformance>["members"][number] | null
+    >()
+
+    for (const group of groups) {
+      const groupShares = shares.filter((share) => share.group_id === group.id)
+      const groupPeriods = periods.filter((period) => period.group_id === group.id)
+      const performance = calculateGroupPerformance(groupShares, groupPeriods)
+
+      map.set(
+        group.id,
+        performance.members.find((item) => item.memberId === profile.member_id) ??
+          null,
+      )
+    }
+
+    return map
+  }, [groups, periods, profile.member_id, shares])
 
   async function logout() {
     await createClient().auth.signOut()
@@ -302,6 +326,8 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                   (period.status === "completed" ||
                     period.status === "opened"),
               ).length
+              const performance = performanceByGroup.get(group.id) ?? null
+              const expanded = expandedGroupId === group.id
 
               return (
                 <Card key={group.id} className="p-4">
@@ -315,6 +341,102 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                     {formatVND(group.contribution_amount)}/chân ·{" "}
                     {groupShares.length} chân · đã hốt {won}
                   </p>
+
+                  {performance && (
+                    <div className="mt-3 rounded-md bg-muted/50 p-3">
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 text-left"
+                        onClick={() =>
+                          setExpandedGroupId(expanded ? null : group.id)
+                        }
+                      >
+                        <div>
+                          <p className="text-xs text-muted-foreground">
+                            Hiệu quả thăm hiện tại
+                          </p>
+                          <p
+                            className={`mt-0.5 font-bold ${
+                              performance.performanceAmount < 0
+                                ? "text-destructive"
+                                : performance.performanceAmount > 0
+                                  ? "text-primary"
+                                  : ""
+                            }`}
+                          >
+                            {formatVND(performance.performanceAmount)}
+                            {performance.liveShares > 0 ? " · tạm tính" : ""}
+                          </p>
+                        </div>
+                        <span className="text-xs font-medium text-primary">
+                          {expanded ? "Thu gọn" : "Xem chi tiết"}
+                        </span>
+                      </button>
+
+                      {expanded && (
+                        <div className="mt-3 space-y-2 border-t border-border pt-3">
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+                            <span className="text-muted-foreground">
+                              Đã hưởng thăm
+                            </span>
+                            <span className="text-right font-medium">
+                              {formatVND(performance.benefitAmount)}
+                            </span>
+                            <span className="text-muted-foreground">
+                              Chi phí khi hốt
+                            </span>
+                            <span className="text-right font-medium">
+                              {formatVND(performance.costAmount)}
+                            </span>
+                          </div>
+
+                          {performance.shares.map((share) => (
+                            <div
+                              key={share.shareId}
+                              className="rounded-md border bg-background p-3 text-sm"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="font-semibold">
+                                  Chân #{share.shareNumber}
+                                </p>
+                                <span className="text-xs text-muted-foreground">
+                                  {share.hasWon
+                                    ? `Đã hốt kỳ ${share.wonPeriodNumber}`
+                                    : "Chân sống · tạm tính"}
+                                </span>
+                              </div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
+                                <span className="text-muted-foreground">
+                                  Đã hưởng thăm
+                                </span>
+                                <span className="text-right">
+                                  {formatVND(share.benefitAmount)}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  Chi phí khi hốt
+                                </span>
+                                <span className="text-right">
+                                  {formatVND(share.costAmount)}
+                                </span>
+                                <span className="font-medium">Hiệu quả</span>
+                                <span
+                                  className={`text-right font-bold ${
+                                    share.performanceAmount < 0
+                                      ? "text-destructive"
+                                      : share.performanceAmount > 0
+                                        ? "text-primary"
+                                        : ""
+                                  }`}
+                                >
+                                  {formatVND(share.performanceAmount)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </Card>
               )
             })}
@@ -329,6 +451,17 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
 
           <div className="mt-2 space-y-2">
             {receipts.slice(0, 12).map((receipt) => {
+              const activePayments = payments.filter(
+                (payment) =>
+                  payment.receipt_id === receipt.id &&
+                  payment.status === "active",
+              )
+              const actuallyCollected = activePayments
+                .filter((payment) => payment.direction === "collect")
+                .reduce((sum, payment) => sum + Number(payment.amount), 0)
+              const actuallyPaid = activePayments
+                .filter((payment) => payment.direction === "pay")
+                .reduce((sum, payment) => sum + Number(payment.amount), 0)
               const net =
                 Number(receipt.source_total_pay || 0) -
                 Number(receipt.source_total_receive || 0) +
@@ -346,9 +479,15 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                       </p>
                     </div>
                     <p className="font-bold">
-                      {net >= 0
-                        ? `Đóng ${formatVND(net)}`
-                        : `Nhận ${formatVND(Math.abs(net))}`}
+                      {actuallyCollected > 0
+                        ? `Đã đóng ${formatVND(actuallyCollected)}`
+                        : actuallyPaid > 0
+                          ? `Đã nhận ${formatVND(actuallyPaid)}`
+                          : net > 0
+                            ? `Phải đóng ${formatVND(net)}`
+                            : net < 0
+                              ? `Phải nhận ${formatVND(Math.abs(net))}`
+                              : "Chưa xác nhận"}
                     </p>
                   </div>
                 </Card>
