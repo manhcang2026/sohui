@@ -22,7 +22,11 @@ import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { buildReceipts } from "./phieu/calculation"
-import { loadReceiptPageData } from "./phieu/data"
+import {
+  fetchActivePaymentTotals,
+  loadReceiptBaseData,
+  loadReceiptLedgerData,
+} from "./phieu/data"
 import { PaymentDialog } from "./phieu/payment-dialog"
 import { shareReceiptJpg } from "./phieu/receipt-jpeg"
 import {
@@ -73,46 +77,80 @@ export function PhieuThuChiPage() {
   const [paymentDialog, setPaymentDialog] =
     useState<PaymentDialogState>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [working, setWorking] = useState(false)
   const [sharingKey, setSharingKey] = useState<string | null>(null)
   const [error, setError] = useState("")
   const paymentWriteLock = useRef(false)
+  const dataRequestId = useRef(0)
+  const baseLoaded = useRef(false)
 
   const effectiveFrom = dateMode === "single" ? singleDate : dateFrom
   const effectiveTo = dateMode === "single" ? singleDate : dateTo
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  const [loadedFrom, setLoadedFrom] = useState(effectiveFrom)
+  const [loadedTo, setLoadedTo] = useState(effectiveTo)
+
+  const loadData = useCallback(async (reloadBase = false) => {
+    if (!effectiveFrom || !effectiveTo || effectiveFrom > effectiveTo) {
+      return
+    }
+
+    const requestId = ++dataRequestId.current
+    const initialLoad = !baseLoaded.current
+    const needsBase = reloadBase || initialLoad
+
+    if (initialLoad) {
+      setLoading(true)
+    } else {
+      setRefreshing(true)
+    }
     setError("")
 
     try {
-      const data = await loadReceiptPageData(effectiveFrom, effectiveTo)
-      setGroups(data.groups)
-      setShares(data.shares)
-      setPeriods(data.periods)
-      setMembers(data.members)
-      setSettings(data.settings)
-      setReceiptRows(data.receiptRows)
-      setPayments(data.payments)
+      const [base, ledger] = await Promise.all([
+        needsBase ? loadReceiptBaseData() : Promise.resolve(null),
+        loadReceiptLedgerData(effectiveFrom, effectiveTo),
+      ])
+
+      if (requestId !== dataRequestId.current) return
+
+      if (base) {
+        setGroups(base.groups)
+        setShares(base.shares)
+        setPeriods(base.periods)
+        setMembers(base.members)
+        setSettings(base.settings)
+        baseLoaded.current = true
+      }
+
+      setReceiptRows(ledger.receiptRows)
+      setPayments(ledger.payments)
+      setLoadedFrom(effectiveFrom)
+      setLoadedTo(effectiveTo)
     } catch (caught) {
+      if (requestId !== dataRequestId.current) return
       console.error(caught)
       setError(
         "Không thể tải dữ liệu phiếu. Vui lòng làm mới và thử lại.",
       )
     } finally {
-      setLoading(false)
+      if (requestId === dataRequestId.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [effectiveFrom, effectiveTo])
 
   useEffect(() => {
-    void loadData()
+    void loadData(false)
   }, [loadData])
 
   const receipts = useMemo(
     () =>
       buildReceipts({
-        effectiveFrom,
-        effectiveTo,
+        effectiveFrom: loadedFrom,
+        effectiveTo: loadedTo,
         groups,
         members,
         payments,
@@ -121,8 +159,8 @@ export function PhieuThuChiPage() {
         shares,
       }),
     [
-      effectiveFrom,
-      effectiveTo,
+      loadedFrom,
+      loadedTo,
       groups,
       members,
       payments,
@@ -344,42 +382,10 @@ export function PhieuThuChiPage() {
       )
 
       const receiptIds = freshReceiptRows.map((row) => row.id)
-      const freshPayments: Array<{
-        receipt_id: string
-        direction: "collect" | "pay"
-        amount: number
-      }> = []
-      const queryBatchSize = 100
 
-      // Đọc lại ledger thật ngay trước lúc insert. Đây là lớp chống việc UI
-      // còn dữ liệu cũ sau một lần bulk vừa chạy xong hoặc một lần retry.
-      for (let i = 0; i < receiptIds.length; i += queryBatchSize) {
-        const ids = receiptIds.slice(i, i + queryBatchSize)
-        const { data, error: paymentReadError } = await supabase
-          .from("receipt_payments")
-          .select("receipt_id, direction, amount")
-          .in("receipt_id", ids)
-          .eq("status", "active")
-
-        if (paymentReadError) throw paymentReadError
-        freshPayments.push(
-          ...((data ?? []) as Array<{
-            receipt_id: string
-            direction: "collect" | "pay"
-            amount: number
-          }>),
-        )
-      }
-
-      const paidByReceiptDirection = new Map<string, number>()
-      for (const payment of freshPayments) {
-        const key = `${payment.receipt_id}|${payment.direction}`
-        paidByReceiptDirection.set(
-          key,
-          (paidByReceiptDirection.get(key) ?? 0) +
-            Number(payment.amount || 0),
-        )
-      }
+      // Luôn đọc lại ledger thật và có phân trang trước khi insert. Không dựa
+      // vào dữ liệu đang hiển thị trên UI vì UI có thể vừa cũ hoặc vừa retry.
+      const paidByReceiptDirection = await fetchActivePaymentTotals(receiptIds)
 
       const pending: Array<{
         receipt: Receipt
@@ -858,7 +864,7 @@ export function PhieuThuChiPage() {
       <div className="mx-auto max-w-3xl p-4 md:p-6">
         <Card className="flex flex-col items-center gap-3 p-8 text-center">
           <p className="font-medium text-destructive">{error}</p>
-          <Button variant="outline" onClick={() => void loadData()}>
+          <Button variant="outline" onClick={() => void loadData(true)}>
             <RefreshCw className="size-4" />
             Thử lại
           </Button>
@@ -934,8 +940,8 @@ export function PhieuThuChiPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void loadData()}
-          disabled={working}
+          onClick={() => void loadData(true)}
+          disabled={working || refreshing}
         >
           <RefreshCw className="size-4" />
           <span className="hidden sm:inline">Làm mới</span>
@@ -1067,7 +1073,14 @@ export function PhieuThuChiPage() {
         </p>
       )}
 
-      {!invalidRange && filteredReceipts.length > 0 && (
+      {refreshing && !invalidRange && (
+        <Card className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+          <LoaderCircle className="size-4 animate-spin" />
+          Đang tải phiếu và đối chiếu giao dịch...
+        </Card>
+      )}
+
+      {!invalidRange && !refreshing && filteredReceipts.length > 0 && (
         <div className="flex items-center gap-3 px-1">
           <Checkbox
             checked={allVisibleChecked}
@@ -1084,7 +1097,7 @@ export function PhieuThuChiPage() {
         </div>
       )}
 
-      {!invalidRange && filteredReceipts.length === 0 ? (
+      {!invalidRange && !refreshing && filteredReceipts.length === 0 ? (
         <Card className="flex flex-col items-center gap-3 p-10 text-center">
           <CalendarDays className="size-8 text-muted-foreground" />
           <div>
@@ -1096,7 +1109,7 @@ export function PhieuThuChiPage() {
         </Card>
       ) : null}
 
-      {!invalidRange && filteredReceipts.length > 0 && (
+      {!invalidRange && !refreshing && filteredReceipts.length > 0 && (
         <>
           <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
             <div className="max-h-[62vh] overflow-auto">
@@ -1150,7 +1163,7 @@ export function PhieuThuChiPage() {
         </>
       )}
 
-      {selectedKeys.length > 0 && (
+      {!refreshing && selectedKeys.length > 0 && (
         <div className="sticky bottom-3 z-30 rounded-xl border bg-card p-3 shadow-lg">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
