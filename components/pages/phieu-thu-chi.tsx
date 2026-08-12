@@ -17,10 +17,13 @@ import {
   History,
   LoaderCircle,
   Pencil,
+  Phone,
   RefreshCw,
   Share2,
   Undo2,
   UserRound,
+  UsersRound,
+  WalletCards,
 } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
@@ -437,11 +440,116 @@ async function createReceiptJpeg(
   settings: SettingsRow,
 ) {
   const width = 1080
-  const margin = 55
+  const margin = 58
   const contentWidth = width - margin * 2
-  const qrUrl = vietQrUrl(settings, receipt, date)
 
-  const visibleTotalRows = [
+  /*
+   * Màu Phiếu v2.
+   * Tạm dùng một mini visual system riêng cho Phiếu.
+   * Sau này khi chốt toàn app mình sẽ đồng bộ lại toàn bộ token.
+   */
+  const COLORS = {
+    navy: "#0f2a56",
+    text: "#172033",
+    muted: "#6b7280",
+    border: "#dbe1ea",
+    soft: "#f7f9fc",
+
+    collect: "#18794e",
+    collectSoft: "#f0f8f3",
+    collectBorder: "#cfe6d7",
+
+    pay: "#c93a3a",
+    paySoft: "#fdf3f3",
+    payBorder: "#f1cccc",
+
+    live: "#18794e",
+    liveSoft: "#f2f8f4",
+
+    dead: "#b54747",
+    deadSoft: "#fbf3f3",
+
+    blueSoft: "#f2f6fc",
+  }
+
+  const qrUrl = vietQrUrl(
+    settings,
+    receipt,
+    date,
+  )
+
+  /*
+   * Tải QR trước để biết đúng tỷ lệ ảnh.
+   * Không ép ảnh QR thành hình vuông nữa.
+   */
+  let qrImage: HTMLImageElement | null = null
+
+  if (
+    qrUrl &&
+    receipt.status !== "cancelled"
+  ) {
+    try {
+      qrImage = await loadImage(qrUrl)
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  const qrWidth = 390
+
+  const qrHeight = qrImage
+    ? qrWidth *
+      (qrImage.naturalHeight /
+        qrImage.naturalWidth)
+    : 0
+
+  /*
+   * Số dòng thực tế của từng dây.
+   * Dùng số dòng thật để tính chiều cao card,
+   * không còn hard-code 210/275 nên phiếu chi không vỡ.
+   */
+  const detailLayouts =
+    receipt.lines.map((line) => {
+      let moneyRows = 1 // Giá thăm
+
+      if (line.payAmount > 0) {
+        moneyRows += 1
+      }
+
+      if (line.huiAmount > 0) {
+        moneyRows += 1
+
+        if (line.feeAmount > 0) {
+          moneyRows += 1
+        }
+
+        moneyRows += 1 // Thực nhận
+      }
+
+      const rightContentHeight =
+        moneyRows * 48 + 16
+
+      const statHeight = 142
+
+      const bodyHeight = Math.max(
+        statHeight,
+        rightContentHeight,
+      )
+
+      return {
+        moneyRows,
+        height: 104 + bodyHeight + 32,
+      }
+    })
+
+  const detailTotalHeight =
+    detailLayouts.reduce(
+      (sum, item) =>
+        sum + item.height + 20,
+      0,
+    )
+
+  const totalRows = [
     receipt.totalPay > 0,
     receipt.totalHuiAmount > 0,
     receipt.totalFee > 0,
@@ -449,33 +557,40 @@ async function createReceiptJpeg(
     receipt.paidAmount > 0,
   ].filter(Boolean).length
 
-  const detailHeights = receipt.lines.map((line) =>
-    line.huiAmount > 0 ? 275 : 210,
-  )
+  const totalSectionHeight =
+    80 +
+    totalRows * 50 +
+    (receipt.totalReceive > 0
+      ? 88
+      : 20)
 
-  const detailsHeight = detailHeights.reduce(
-    (total, current) => total + current,
-    0,
-  )
+  const qrSectionHeight = qrImage
+    ? 120 + qrHeight + 85
+    : 0
 
-  const totalsHeight =
-    85 + visibleTotalRows * 50
-
-  const qrSectionHeight = qrUrl ? 500 : 0
-
+  /*
+   * Các khối cố định:
+   * header 165
+   * action 175
+   * owner 150
+   * section title 70
+   * footer padding
+   */
   const height =
-    235 +
+    165 +
+    175 +
     150 +
-    135 +
-    75 +
-    detailsHeight +
-    totalsHeight +
+    70 +
+    detailTotalHeight +
+    totalSectionHeight +
     qrSectionHeight +
-    100
+    90
 
-  const canvas = document.createElement("canvas")
+  const canvas =
+    document.createElement("canvas")
+
   canvas.width = width
-  canvas.height = height
+  canvas.height = Math.ceil(height)
 
   const ctx = canvas.getContext("2d")
 
@@ -486,38 +601,298 @@ async function createReceiptJpeg(
   }
 
   ctx.fillStyle = "#ffffff"
-  ctx.fillRect(0, 0, width, height)
+  ctx.fillRect(
+    0,
+    0,
+    width,
+    canvas.height,
+  )
 
-  ctx.strokeStyle = "#e5e7eb"
   ctx.lineWidth = 2
 
-  let y = 60
+  /*
+   * Các helper chỉ dùng trong JPG.
+   */
+  function drawPersonGlyph(
+    centerX: number,
+    centerY: number,
+    color: string,
+  ) {
+    ctx.fillStyle = color
+
+    ctx.beginPath()
+    ctx.arc(
+      centerX,
+      centerY - 8,
+      8,
+      0,
+      Math.PI * 2,
+    )
+    ctx.fill()
+
+    ctx.beginPath()
+    ctx.arc(
+      centerX,
+      centerY + 12,
+      15,
+      Math.PI,
+      Math.PI * 2,
+    )
+    ctx.lineTo(
+      centerX + 15,
+      centerY + 17,
+    )
+    ctx.lineTo(
+      centerX - 15,
+      centerY + 17,
+    )
+    ctx.closePath()
+    ctx.fill()
+  }
+
+  function drawWalletGlyph(
+    centerX: number,
+    centerY: number,
+    color: string,
+  ) {
+    ctx.strokeStyle = color
+    ctx.fillStyle = color
+    ctx.lineWidth = 5
+
+    roundedRect(
+      ctx,
+      centerX - 23,
+      centerY - 18,
+      46,
+      36,
+      8,
+    )
+    ctx.stroke()
+
+    roundedRect(
+      ctx,
+      centerX + 5,
+      centerY - 7,
+      24,
+      16,
+      5,
+    )
+    ctx.stroke()
+
+    ctx.beginPath()
+    ctx.arc(
+      centerX + 14,
+      centerY + 1,
+      3,
+      0,
+      Math.PI * 2,
+    )
+    ctx.fill()
+  }
+
+  function drawInfoCardRow(
+    label: string,
+    value: string,
+    rowY: number,
+    icon: "person" | "phone",
+  ) {
+    const iconCenterX = margin + 34
+    const iconCenterY = rowY - 8
+
+    ctx.fillStyle = COLORS.blueSoft
+
+    ctx.beginPath()
+    ctx.arc(
+      iconCenterX,
+      iconCenterY,
+      25,
+      0,
+      Math.PI * 2,
+    )
+    ctx.fill()
+
+    if (icon === "person") {
+      drawPersonGlyph(
+        iconCenterX,
+        iconCenterY,
+        COLORS.navy,
+      )
+    } else {
+      ctx.fillStyle = COLORS.navy
+      ctx.textAlign = "center"
+      ctx.font =
+        "700 28px Arial, sans-serif"
+      ctx.fillText(
+        "☎",
+        iconCenterX,
+        iconCenterY + 9,
+      )
+    }
+
+    ctx.textAlign = "left"
+    ctx.fillStyle = COLORS.muted
+    ctx.font =
+      "26px Arial, sans-serif"
+
+    ctx.fillText(
+      label,
+      margin + 76,
+      rowY,
+    )
+
+    ctx.textAlign = "right"
+    ctx.fillStyle = COLORS.navy
+    ctx.font =
+      "700 27px Arial, sans-serif"
+
+    ctx.fillText(
+      value,
+      width - margin - 20,
+      rowY,
+    )
+  }
+
+  function drawMoneyRow(
+    label: string,
+    value: string,
+    x: number,
+    rowY: number,
+    rowWidth: number,
+    options?: {
+      negative?: boolean
+      strong?: boolean
+    },
+  ) {
+    ctx.textAlign = "left"
+
+    ctx.fillStyle = options?.strong
+      ? COLORS.navy
+      : COLORS.muted
+
+    ctx.font = options?.strong
+      ? "700 27px Arial, sans-serif"
+      : "25px Arial, sans-serif"
+
+    ctx.fillText(
+      label,
+      x,
+      rowY,
+    )
+
+    ctx.textAlign = "right"
+
+    ctx.fillStyle = options?.negative
+      ? COLORS.pay
+      : COLORS.navy
+
+    ctx.font = options?.strong
+      ? "800 28px Arial, sans-serif"
+      : "700 25px Arial, sans-serif"
+
+    ctx.fillText(
+      value,
+      x + rowWidth,
+      rowY,
+    )
+  }
+
+  function drawStatTile(
+    label: string,
+    value: number,
+    x: number,
+    tileY: number,
+    tileWidth: number,
+    type: "live" | "dead",
+  ) {
+    const isLive = type === "live"
+
+    const textColor = isLive
+      ? COLORS.live
+      : COLORS.dead
+
+    const background = isLive
+      ? COLORS.liveSoft
+      : COLORS.deadSoft
+
+    const border = isLive
+      ? COLORS.collectBorder
+      : COLORS.payBorder
+
+    ctx.fillStyle = background
+    ctx.strokeStyle = border
+    ctx.lineWidth = 2
+
+    roundedRect(
+      ctx,
+      x,
+      tileY,
+      tileWidth,
+      130,
+      16,
+    )
+
+    ctx.fill()
+    ctx.stroke()
+
+    drawPersonGlyph(
+      x + 35,
+      tileY + 42,
+      textColor,
+    )
+
+    ctx.fillStyle = textColor
+    ctx.textAlign = "left"
+    ctx.font =
+      "600 21px Arial, sans-serif"
+
+    ctx.fillText(
+      label,
+      x + 64,
+      tileY + 47,
+    )
+
+    ctx.font =
+      "800 38px Arial, sans-serif"
+
+    ctx.fillText(
+      String(value),
+      x + 64,
+      tileY + 93,
+    )
+  }
+
+  let y = 58
 
   /*
-   * TIÊU ĐỀ
+   * HEADER
    */
-  ctx.fillStyle = "#111827"
+  ctx.fillStyle = COLORS.navy
   ctx.textAlign = "center"
-  ctx.font = "700 40px Arial, sans-serif"
+  ctx.font =
+    "800 45px Arial, sans-serif"
+
   ctx.fillText(
     "PHIẾU HỤI",
     width / 2,
     y,
   )
 
-  y += 48
+  y += 50
 
-  ctx.font = "700 31px Arial, sans-serif"
+  ctx.font =
+    "700 33px Arial, sans-serif"
+
   ctx.fillText(
     receipt.member.full_name,
     width / 2,
     y,
   )
 
-  y += 38
+  y += 39
 
-  ctx.fillStyle = "#6b7280"
-  ctx.font = "23px Arial, sans-serif"
+  ctx.fillStyle = COLORS.muted
+  ctx.font =
+    "24px Arial, sans-serif"
 
   ctx.fillText(
     formatDate(date),
@@ -526,180 +901,206 @@ async function createReceiptJpeg(
   )
 
   /*
-   * SỐ TIỀN CẦN XỬ LÝ
+   * ACTION CARD
    */
-  y += 38
+  y += 35
+
+  const isCollect =
+    receipt.direction === "collect"
+
+  const isPay =
+    receipt.direction === "pay"
+
+  const isCancelled =
+    receipt.status === "cancelled"
+
+  const isFinished =
+    !isCancelled &&
+    receipt.remainingAmount <= 0
 
   let actionLabel = "ĐÃ CÂN BẰNG"
   let actionAmount =
     formatVND(receipt.remainingAmount)
-  let actionColor = "#374151"
-  let actionSubtext = ""
 
-  if (receipt.status === "cancelled") {
+  let actionDescription = ""
+  let actionColor = COLORS.navy
+  let actionBackground = COLORS.blueSoft
+  let actionBorder = COLORS.border
+
+  if (isCancelled) {
     actionLabel = "PHIẾU ĐÃ HỦY"
     actionAmount = "—"
-  } else if (receipt.remainingAmount <= 0) {
+  } else if (isFinished) {
     actionLabel = "ĐÃ THANH TOÁN ĐỦ"
     actionAmount = formatVND(0)
-  } else if (receipt.direction === "collect") {
+  } else if (isCollect) {
     actionLabel = "CẦN THU"
     actionAmount = `+${formatVND(
       receipt.remainingAmount,
     )}`
-    actionColor = "#047857"
-    actionSubtext =
+    actionDescription =
       "Hụi viên đóng cho chủ hụi"
-  } else if (receipt.direction === "pay") {
+    actionColor = COLORS.collect
+    actionBackground =
+      COLORS.collectSoft
+    actionBorder =
+      COLORS.collectBorder
+  } else if (isPay) {
     actionLabel = "CẦN CHI"
     actionAmount = `−${formatVND(
       receipt.remainingAmount,
     )}`
-    actionColor = "#dc2626"
-    actionSubtext =
+    actionDescription =
       "Chủ hụi giao cho hụi viên"
+    actionColor = COLORS.pay
+    actionBackground =
+      COLORS.paySoft
+    actionBorder =
+      COLORS.payBorder
   }
 
-  ctx.fillStyle = "#f9fafb"
+  ctx.fillStyle = actionBackground
+  ctx.strokeStyle = actionBorder
+  ctx.lineWidth = 2
 
   roundedRect(
     ctx,
     margin,
     y,
     contentWidth,
-    130,
-    18,
+    145,
+    20,
   )
 
   ctx.fill()
+  ctx.stroke()
 
-  ctx.fillStyle = actionColor
-  ctx.textAlign = "center"
-  ctx.font = "700 25px Arial, sans-serif"
+  const walletCircleX = margin + 94
+  const walletCircleY = y + 72
 
-  ctx.fillText(
-    actionLabel,
-    width / 2,
-    y + 35,
+  ctx.fillStyle = isCollect
+    ? "#e4f2e9"
+    : isPay
+      ? "#f8dddd"
+      : COLORS.blueSoft
+
+  ctx.beginPath()
+  ctx.arc(
+    walletCircleX,
+    walletCircleY,
+    47,
+    0,
+    Math.PI * 2,
+  )
+  ctx.fill()
+
+  drawWalletGlyph(
+    walletCircleX,
+    walletCircleY,
+    actionColor,
   )
 
-  ctx.font = "800 46px Arial, sans-serif"
-
-  ctx.fillText(
-    actionAmount,
-    width / 2,
-    y + 85,
-  )
-
-  if (actionSubtext) {
-    ctx.fillStyle = "#6b7280"
-    ctx.font = "21px Arial, sans-serif"
-
-    ctx.fillText(
-      actionSubtext,
-      width / 2,
-      y + 116,
-    )
-  }
-
-  y += 160
-
-  /*
-   * CHỦ HỤI
-   */
-  ctx.textAlign = "left"
-
-  drawLabelValue(
-    ctx,
-    "Chủ hụi",
-    settings.owner_name ||
-      "Chưa khai báo",
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 45
-
-  drawLabelValue(
-    ctx,
-    "SĐT",
-    settings.owner_phone ||
-      "Chưa khai báo",
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 45
+  ctx.strokeStyle = actionBorder
 
   drawLine(
     ctx,
+    margin + 178,
+    y + 25,
+    margin + 178,
+    y + 120,
+  )
+
+  const actionCenterX =
+    margin + 178 +
+    (contentWidth - 178) / 2
+
+  ctx.textAlign = "center"
+  ctx.fillStyle = actionColor
+  ctx.font =
+    "700 26px Arial, sans-serif"
+
+  ctx.fillText(
+    actionLabel,
+    actionCenterX,
+    y + 42,
+  )
+
+  ctx.font =
+    "800 47px Arial, sans-serif"
+
+  ctx.fillText(
+    actionAmount,
+    actionCenterX,
+    y + 94,
+  )
+
+  if (actionDescription) {
+    ctx.fillStyle = COLORS.muted
+    ctx.font =
+      "23px Arial, sans-serif"
+
+    ctx.fillText(
+      actionDescription,
+      actionCenterX,
+      y + 125,
+    )
+  }
+
+  /*
+   * OWNER INFO
+   */
+  y += 170
+
+  ctx.fillStyle = "#ffffff"
+  ctx.strokeStyle = COLORS.border
+
+  roundedRect(
+    ctx,
     margin,
     y,
-    width - margin,
-    y,
+    contentWidth,
+    126,
+    17,
+  )
+
+  ctx.fill()
+  ctx.stroke()
+
+  drawInfoCardRow(
+    "Chủ hụi",
+    settings.owner_name ||
+      "Chưa khai báo",
+    y + 45,
+    "person",
+  )
+
+  ctx.strokeStyle = COLORS.border
+
+  drawLine(
+    ctx,
+    margin + 22,
+    y + 63,
+    width - margin - 22,
+    y + 63,
+  )
+
+  drawInfoCardRow(
+    "SĐT",
+    settings.owner_phone ||
+      "Chưa khai báo",
+    y + 103,
+    "phone",
   )
 
   /*
-   * TỔNG QUAN
+   * SECTION TITLE
    */
-  y += 30
+  y += 168
 
-  const gap = 14
-  const summaryWidth =
-    (contentWidth - gap * 3) / 4
-
-  drawSummaryBox(
-    ctx,
-    "Số dây",
-    String(receipt.groupCount),
-    margin,
-    y,
-    summaryWidth,
-    90,
-  )
-
-  drawSummaryBox(
-    ctx,
-    "Số chân",
-    String(receipt.totalShares),
-    margin + summaryWidth + gap,
-    y,
-    summaryWidth,
-    90,
-  )
-
-  drawSummaryBox(
-    ctx,
-    "Chân sống",
-    String(receipt.liveShares),
-    margin +
-      (summaryWidth + gap) * 2,
-    y,
-    summaryWidth,
-    90,
-  )
-
-  drawSummaryBox(
-    ctx,
-    "Chân chết",
-    String(receipt.deadShares),
-    margin +
-      (summaryWidth + gap) * 3,
-    y,
-    summaryWidth,
-    90,
-  )
-
-  y += 125
-
-  /*
-   * CHI TIẾT
-   */
-  ctx.fillStyle = "#111827"
+  ctx.fillStyle = COLORS.navy
   ctx.textAlign = "left"
-  ctx.font = "700 28px Arial, sans-serif"
+  ctx.font =
+    "800 31px Arial, sans-serif"
 
   ctx.fillText(
     "Chi tiết hụi",
@@ -707,20 +1108,24 @@ async function createReceiptJpeg(
     y,
   )
 
-  y += 30
+  y += 28
 
+  /*
+   * MỖI DÂY HỤI
+   */
   for (
     let index = 0;
     index < receipt.lines.length;
     index++
   ) {
     const line = receipt.lines[index]
-    const boxHeight =
-      detailHeights[index] - 18
+    const layout =
+      detailLayouts[index]
 
-    y += 15
+    y += 16
 
-    ctx.strokeStyle = "#d1d5db"
+    ctx.fillStyle = "#ffffff"
+    ctx.strokeStyle = COLORS.border
     ctx.lineWidth = 2
 
     roundedRect(
@@ -728,150 +1133,208 @@ async function createReceiptJpeg(
       margin,
       y,
       contentWidth,
-      boxHeight,
-      16,
+      layout.height,
+      18,
     )
 
+    ctx.fill()
     ctx.stroke()
 
-    ctx.fillStyle = "#111827"
+    /*
+     * Navy accent rất mỏng,
+     * không làm phiếu quá màu mè.
+     */
+    ctx.fillStyle = COLORS.navy
+
+    roundedRect(
+      ctx,
+      margin,
+      y,
+      contentWidth,
+      7,
+      4,
+    )
+
+    ctx.fill()
+
+    const headerY = y + 51
+
     ctx.textAlign = "left"
-    ctx.font = "700 27px Arial, sans-serif"
+    ctx.fillStyle = COLORS.navy
+    ctx.font =
+      "800 26px Arial, sans-serif"
+
+    const groupTitle = line.groupCode
+      ? `${line.groupCode} · ${line.groupName}`
+      : line.groupName
 
     ctx.fillText(
-      `${index + 1}. ${line.groupName}`,
-      margin + 22,
-      y + 40,
+      groupTitle,
+      margin + 24,
+      headerY,
     )
 
     ctx.textAlign = "right"
-    ctx.font = "700 24px Arial, sans-serif"
 
     ctx.fillText(
       `Kỳ ${line.periodNumber}/${line.totalPeriods}`,
-      width - margin - 22,
-      y + 40,
+      width - margin - 24,
+      headerY,
     )
 
-    ctx.fillStyle = "#6b7280"
-    ctx.textAlign = "left"
-    ctx.font = "21px Arial, sans-serif"
-
-    if (line.groupCode) {
-      ctx.fillText(
-        line.groupCode,
-        margin + 22,
-        y + 72,
-      )
-    }
+    ctx.strokeStyle = COLORS.border
 
     drawLine(
       ctx,
-      margin + 20,
-      y + 92,
-      width - margin - 20,
-      y + 92,
+      margin + 22,
+      y + 78,
+      width - margin - 22,
+      y + 78,
     )
 
-    const leftX = margin + 22
-    const rightX =
-      margin + contentWidth / 2 + 18
-    const columnWidth =
-      contentWidth / 2 - 42
+    const bodyY = y + 101
 
-    let detailY = y + 134
+    /*
+     * Trái: 2 tile Chân sống/Chân chết.
+     */
+    const statsAreaWidth = 390
+    const tileGap = 14
+    const tileWidth =
+      (statsAreaWidth - tileGap) / 2
 
-    drawLabelValue(
+    drawStatTile(
+      "Chân sống",
+      line.liveShares,
+      margin + 24,
+      bodyY,
+      tileWidth,
+      "live",
+    )
+
+    drawStatTile(
+      "Chân chết",
+      line.deadShares,
+      margin + 24 + tileWidth + tileGap,
+      bodyY,
+      tileWidth,
+      "dead",
+    )
+
+    const dividerX =
+      margin + 24 + statsAreaWidth + 23
+
+    ctx.strokeStyle = COLORS.border
+
+    drawLine(
       ctx,
+      dividerX,
+      bodyY,
+      dividerX,
+      y + layout.height - 24,
+    )
+
+    /*
+     * Phải: tiền của dây.
+     * Không còn dòng Chân sống/chết 1/1.
+     */
+    const moneyX = dividerX + 28
+
+    const moneyWidth =
+      width -
+      margin -
+      24 -
+      moneyX
+
+    let moneyY = bodyY + 32
+
+    drawMoneyRow(
       "Giá thăm",
       formatVND(line.bidAmount),
-      leftX,
-      detailY,
-      columnWidth,
-    )
-
-    drawLabelValue(
-      ctx,
-      "Chân sống / chết",
-      `${line.liveShares} / ${line.deadShares}`,
-      rightX,
-      detailY,
-      columnWidth,
+      moneyX,
+      moneyY,
+      moneyWidth,
     )
 
     if (line.payAmount > 0) {
-      detailY += 43
+      moneyY += 48
 
-      drawLabelValue(
-        ctx,
+      drawMoneyRow(
         "Tiền đóng",
         formatVND(line.payAmount),
-        leftX,
-        detailY,
-        contentWidth - 44,
+        moneyX,
+        moneyY,
+        moneyWidth,
       )
     }
 
     if (line.huiAmount > 0) {
-      detailY += 43
+      moneyY += 48
 
-      drawLabelValue(
-        ctx,
+      drawMoneyRow(
         "Hốt hụi",
         formatVND(line.huiAmount),
-        leftX,
-        detailY,
-        contentWidth - 44,
+        moneyX,
+        moneyY,
+        moneyWidth,
       )
 
       if (line.feeAmount > 0) {
-        detailY += 43
+        moneyY += 48
 
-        drawLabelValue(
-          ctx,
-          "Trừ tiền thảo",
+        drawMoneyRow(
+          "Tiền thảo",
           `−${formatVND(
             line.feeAmount,
           )}`,
-          leftX,
-          detailY,
-          contentWidth - 44,
+          moneyX,
+          moneyY,
+          moneyWidth,
+          {
+            negative: true,
+          },
         )
       }
 
-      detailY += 43
+      moneyY += 18
 
-      drawLabelValue(
+      ctx.strokeStyle = COLORS.border
+
+      drawLine(
         ctx,
-        "Thực nhận sau tiền thảo",
-        formatVND(line.receiveAmount),
-        leftX,
-        detailY,
-        contentWidth - 44,
+        moneyX,
+        moneyY,
+        moneyX + moneyWidth,
+        moneyY,
+      )
+
+      moneyY += 41
+
+      drawMoneyRow(
+        "Thực nhận",
+        formatVND(
+          line.receiveAmount,
+        ),
+        moneyX,
+        moneyY,
+        moneyWidth,
+        {
+          strong: true,
+        },
       )
     }
 
-    y += boxHeight + 8
+    y += layout.height + 4
   }
 
   /*
-   * TỔNG CỘNG
+   * TỔNG KẾT
    */
-  y += 25
+  y += 34
 
-  drawLine(
-    ctx,
-    margin,
-    y,
-    width - margin,
-    y,
-  )
-
-  y += 45
-
-  ctx.fillStyle = "#111827"
+  ctx.fillStyle = COLORS.navy
   ctx.textAlign = "left"
-  ctx.font = "700 28px Arial, sans-serif"
+  ctx.font =
+    "800 31px Arial, sans-serif"
 
   ctx.fillText(
     "Tổng kết",
@@ -879,161 +1342,216 @@ async function createReceiptJpeg(
     y,
   )
 
-  y += 45
+  y += 25
+
+  const totalCardY = y
+
+  let totalCardHeight =
+    totalSectionHeight - 20
+
+  ctx.fillStyle = COLORS.soft
+  ctx.strokeStyle = COLORS.border
+
+  roundedRect(
+    ctx,
+    margin,
+    totalCardY,
+    contentWidth,
+    totalCardHeight,
+    17,
+  )
+
+  ctx.fill()
+  ctx.stroke()
+
+  let totalY = totalCardY + 45
 
   if (receipt.totalPay > 0) {
-    drawLabelValue(
-      ctx,
+    drawMoneyRow(
       "Tổng tiền đóng hụi",
       formatVND(receipt.totalPay),
-      margin,
-      y,
-      contentWidth,
+      margin + 25,
+      totalY,
+      contentWidth - 50,
     )
 
-    y += 48
+    totalY += 50
   }
 
   if (receipt.totalHuiAmount > 0) {
-    drawLabelValue(
-      ctx,
+    drawMoneyRow(
       "Tổng hốt hụi",
       formatVND(
         receipt.totalHuiAmount,
       ),
-      margin,
-      y,
-      contentWidth,
+      margin + 25,
+      totalY,
+      contentWidth - 50,
     )
 
-    y += 48
+    totalY += 50
   }
 
   if (receipt.totalFee > 0) {
-    drawLabelValue(
-      ctx,
+    drawMoneyRow(
       "Trừ tiền thảo",
       `−${formatVND(
         receipt.totalFee,
       )}`,
-      margin,
-      y,
-      contentWidth,
+      margin + 25,
+      totalY,
+      contentWidth - 50,
+      {
+        negative: true,
+      },
     )
 
-    y += 48
+    totalY += 50
   }
 
   if (receipt.settlementAmount !== 0) {
-    drawLabelValue(
-      ctx,
+    const adjustmentPrefix =
+      receipt.settlementAmount > 0
+        ? "+"
+        : "−"
+
+    drawMoneyRow(
       "Tất toán / điều chỉnh",
-      `${
-        receipt.settlementAmount > 0
-          ? "+"
-          : "−"
-      }${formatVND(
+      `${adjustmentPrefix}${formatVND(
         Math.abs(
           receipt.settlementAmount,
         ),
       )}`,
-      margin,
-      y,
-      contentWidth,
+      margin + 25,
+      totalY,
+      contentWidth - 50,
     )
 
-    y += 48
+    totalY += 50
   }
 
   if (receipt.paidAmount > 0) {
-    drawLabelValue(
-      ctx,
+    drawMoneyRow(
       "Đã thu / chi",
       formatVND(
         receipt.paidAmount,
       ),
-      margin,
-      y,
-      contentWidth,
+      margin + 25,
+      totalY,
+      contentWidth - 50,
     )
 
-    y += 48
+    totalY += 50
   }
 
   /*
-   * QR
+   * Nếu có hốt hụi, làm nổi bật
+   * tổng thực nhận sau tiền thảo.
+   *
+   * Đây KHÔNG phải số ròng CẦN CHI ở đầu phiếu.
    */
-  if (
-    qrUrl &&
-    receipt.status !== "cancelled"
-  ) {
-    y += 18
+  if (receipt.totalReceive > 0) {
+    totalY += 5
 
-    drawLine(
+    ctx.fillStyle = COLORS.blueSoft
+    ctx.strokeStyle = "#d4e0f3"
+
+    roundedRect(
+      ctx,
+      margin + 18,
+      totalY,
+      contentWidth - 36,
+      66,
+      13,
+    )
+
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.textAlign = "left"
+    ctx.fillStyle = COLORS.navy
+    ctx.font =
+      "800 25px Arial, sans-serif"
+
+    ctx.fillText(
+      "Thực nhận sau tiền thảo",
+      margin + 40,
+      totalY + 42,
+    )
+
+    ctx.textAlign = "right"
+    ctx.font =
+      "800 30px Arial, sans-serif"
+
+    ctx.fillText(
+      formatVND(
+        receipt.totalReceive,
+      ),
+      width - margin - 40,
+      totalY + 42,
+    )
+  }
+
+  y =
+    totalCardY +
+    totalCardHeight
+
+  /*
+   * QR — chỉ phiếu thu.
+   */
+  if (qrImage) {
+    y += 34
+
+    ctx.fillStyle = COLORS.blueSoft
+    ctx.strokeStyle = "#d4e0f3"
+
+    const qrCardHeight =
+      95 +
+      qrHeight +
+      65
+
+    roundedRect(
       ctx,
       margin,
       y,
-      width - margin,
-      y,
+      contentWidth,
+      qrCardHeight,
+      18,
     )
 
-    y += 45
+    ctx.fill()
+    ctx.stroke()
 
-    ctx.fillStyle = "#111827"
+    ctx.fillStyle = COLORS.navy
     ctx.textAlign = "center"
-    ctx.font = "700 27px Arial, sans-serif"
+    ctx.font =
+      "800 27px Arial, sans-serif"
 
     ctx.fillText(
       "Quét QR để đóng đúng số tiền",
       width / 2,
-      y,
+      y + 46,
     )
 
-    y += 37
+    const qrX =
+      (width - qrWidth) / 2
 
-    ctx.fillStyle = "#6b7280"
-    ctx.font = "21px Arial, sans-serif"
+    const qrY = y + 70
 
-    ctx.fillText(
-      `${settings.bank_name} · ${settings.bank_account_number}`,
-      width / 2,
-      y,
+    /*
+     * Giữ đúng aspect ratio của VietQR.
+     */
+    ctx.drawImage(
+      qrImage,
+      qrX,
+      qrY,
+      qrWidth,
+      qrHeight,
     )
 
-    y += 28
-
-    try {
-      const qrImage =
-        await loadImage(qrUrl)
-
-      const qrSize = 330
-
-      ctx.drawImage(
-        qrImage,
-        (width - qrSize) / 2,
-        y,
-        qrSize,
-        qrSize,
-      )
-
-      y += qrSize + 35
-    } catch (error) {
-      console.error(error)
-
-      ctx.fillStyle = "#6b7280"
-      ctx.font = "22px Arial, sans-serif"
-
-      ctx.fillText(
-        "Không tải được ảnh QR",
-        width / 2,
-        y + 50,
-      )
-
-      y += 110
-    }
-
-    ctx.fillStyle = "#374151"
-    ctx.font = "22px Arial, sans-serif"
+    ctx.fillStyle = COLORS.muted
+    ctx.font =
+      "24px Arial, sans-serif"
 
     ctx.fillText(
       `Nội dung: ${transferText(
@@ -1041,8 +1559,10 @@ async function createReceiptJpeg(
         date,
       )}`,
       width / 2,
-      y,
+      qrY + qrHeight + 39,
     )
+
+    y += qrCardHeight
   }
 
   return canvasToJpegFile(
@@ -2323,14 +2843,27 @@ function ReceiptPreview({
             receipt.remainingAmount,
           )
 
-  const actionColor =
-    cancelled || finished
-      ? "text-muted-foreground"
-      : receipt.direction === "collect"
-        ? "text-emerald-700"
-        : receipt.direction === "pay"
-          ? "text-red-600"
-          : "text-muted-foreground"
+  const isCollect =
+    !cancelled &&
+    !finished &&
+    receipt.direction === "collect"
+
+  const isPay =
+    !cancelled &&
+    !finished &&
+    receipt.direction === "pay"
+
+  const actionColor = isCollect
+    ? "text-emerald-700"
+    : isPay
+      ? "text-red-600"
+      : "text-slate-600"
+
+  const actionBoxClass = isCollect
+    ? "border-emerald-200 bg-emerald-50/70"
+    : isPay
+      ? "border-red-200 bg-red-50/70"
+      : "border-slate-200 bg-slate-50"
 
   async function handleDownloadJpg() {
     if (exporting) return
@@ -2370,16 +2903,14 @@ function ReceiptPreview({
           settings,
         )
 
-      const action =
-        receipt.direction === "collect"
-          ? `Cần đóng ${formatVND(
-              receipt.remainingAmount,
-            )}`
-          : receipt.direction === "pay"
-            ? `Được nhận ${formatVND(
-                receipt.remainingAmount,
-              )}`
-            : "Phiếu đã cân bằng"
+      /*
+       * Chỉ gửi một nội dung ngắn.
+       * Không mang theo tên/số tiền/cần đóng như bản cũ.
+       */
+      const shareText =
+        `Phiếu hụi ngày ${formatDate(
+          date,
+        )}`
 
       if (
         navigator.share &&
@@ -2390,12 +2921,8 @@ function ReceiptPreview({
       ) {
         try {
           await navigator.share({
-            title: `Phiếu hụi - ${receipt.member.full_name}`,
-            text: `Phiếu hụi ${formatDate(
-              date,
-            )} - ${
-              receipt.member.full_name
-            } - ${action}`,
+            title: shareText,
+            text: shareText,
             files: [file],
           })
 
@@ -2440,7 +2967,7 @@ function ReceiptPreview({
         </Button>
 
         <div>
-          <h1 className="text-lg font-bold">
+          <h1 className="text-lg font-bold text-slate-900">
             Phiếu hụi
           </h1>
 
@@ -2452,296 +2979,355 @@ function ReceiptPreview({
         </div>
       </div>
 
-      <Card className="overflow-hidden">
-        <div className="border-b p-4 text-center sm:p-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Phiếu hụi
+      <Card className="overflow-hidden border-slate-200 shadow-sm">
+        {/* HEADER */}
+        <div className="p-5 text-center sm:p-6">
+          <p className="text-xl font-extrabold tracking-tight text-[#0f2a56] sm:text-2xl">
+            PHIẾU HỤI
           </p>
 
-          <h2 className="mt-1 text-xl font-bold">
+          <h2 className="mt-2 text-xl font-bold text-[#0f2a56] sm:text-2xl">
             {receipt.member.full_name}
           </h2>
 
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-slate-500 sm:text-base">
             {formatDate(date)}
           </p>
 
-          <div className="mt-4 rounded-lg bg-muted/40 px-4 py-4">
-            <p
-              className={`text-sm font-bold uppercase ${actionColor}`}
+          <div
+            className={`mt-5 flex items-center gap-4 rounded-xl border px-4 py-4 text-left sm:px-5 ${actionBoxClass}`}
+          >
+            <div
+              className={`flex size-12 shrink-0 items-center justify-center rounded-full ${
+                isCollect
+                  ? "bg-emerald-100 text-emerald-700"
+                  : isPay
+                    ? "bg-red-100 text-red-600"
+                    : "bg-slate-100 text-slate-600"
+              }`}
             >
-              {actionLabel}
-            </p>
+              <WalletCards className="size-6" />
+            </div>
 
-            <p
-              className={`mt-1 text-3xl font-black tabular-nums ${actionColor}`}
-            >
-              {actionAmount}
-            </p>
-
-            {actionDescription &&
-              !finished &&
-              !cancelled && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {actionDescription}
-                </p>
-              )}
-          </div>
-        </div>
-
-        <div className="border-b p-4 sm:p-5">
-          <div className="grid gap-2 text-sm sm:grid-cols-2">
-            <InfoRow
-              label="Chủ hụi"
-              value={
-                settings.owner_name ||
-                "Chưa khai báo"
-              }
-            />
-
-            <InfoRow
-              label="SĐT"
-              value={
-                settings.owner_phone ||
-                "Chưa khai báo"
-              }
-            />
-          </div>
-        </div>
-
-        <div className="border-b p-4 sm:p-5">
-          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-            <SummaryCell
-              label="Số dây"
-              value={String(
-                receipt.groupCount,
-              )}
-            />
-
-            <SummaryCell
-              label="Số chân"
-              value={String(
-                receipt.totalShares,
-              )}
-            />
-
-            <SummaryCell
-              label="Chân sống"
-              value={String(
-                receipt.liveShares,
-              )}
-            />
-
-            <SummaryCell
-              label="Chân chết"
-              value={String(
-                receipt.deadShares,
-              )}
-            />
-          </div>
-        </div>
-
-        <div className="space-y-3 p-4 sm:p-5">
-          <h3 className="font-bold">
-            Chi tiết hụi
-          </h3>
-
-          {receipt.lines.map(
-            (line, index) => (
-              <div
-                key={line.periodId}
-                className="rounded-lg border p-3.5"
+            <div className="min-w-0 flex-1 text-center">
+              <p
+                className={`text-sm font-bold uppercase tracking-wide ${actionColor}`}
               >
-                <div className="flex items-start justify-between gap-3 border-b pb-2.5">
-                  <div className="min-w-0">
-                    <p className="font-semibold">
-                      {index + 1}.{" "}
-                      {line.groupName}
-                    </p>
+                {actionLabel}
+              </p>
 
-                    {line.groupCode && (
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {line.groupCode}
-                      </p>
-                    )}
-                  </div>
+              <p
+                className={`mt-1 break-words text-2xl font-black tabular-nums sm:text-3xl ${actionColor}`}
+              >
+                {actionAmount}
+              </p>
 
-                  <p className="shrink-0 text-sm font-semibold">
-                    Kỳ{" "}
-                    {line.periodNumber}/
-                    {line.totalPeriods}
+              {actionDescription &&
+                !finished &&
+                !cancelled && (
+                  <p className="mt-1 text-sm text-slate-500">
+                    {actionDescription}
                   </p>
-                </div>
-
-                <div className="mt-3 grid gap-x-5 gap-y-2 text-sm sm:grid-cols-2">
-                  <InfoRow
-                    label="Giá thăm"
-                    value={formatVND(
-                      line.bidAmount,
-                    )}
-                  />
-
-                  <InfoRow
-                    label="Chân sống / chết"
-                    value={`${line.liveShares} / ${line.deadShares}`}
-                  />
-
-                  {line.payAmount > 0 && (
-                    <InfoRow
-                      label="Tiền đóng"
-                      value={formatVND(
-                        line.payAmount,
-                      )}
-                    />
-                  )}
-
-                  {line.huiAmount > 0 && (
-                    <>
-                      <InfoRow
-                        label="Hốt hụi"
-                        value={formatVND(
-                          line.huiAmount,
-                        )}
-                      />
-
-                      {line.feeAmount >
-                        0 && (
-                        <InfoRow
-                          label="Trừ tiền thảo"
-                          value={`−${formatVND(
-                            line.feeAmount,
-                          )}`}
-                        />
-                      )}
-
-                      <InfoRow
-                        label="Thực nhận sau tiền thảo"
-                        value={formatVND(
-                          line.receiveAmount,
-                        )}
-                      />
-                    </>
-                  )}
-                </div>
-              </div>
-            ),
-          )}
+                )}
+            </div>
+          </div>
         </div>
 
-        <div className="border-t bg-muted/20 p-4 sm:p-5">
-          <h3 className="mb-3 font-semibold">
+        {/* OWNER */}
+        <div className="border-t border-slate-200 px-5 py-4 sm:px-6">
+          <div className="space-y-0">
+            <div className="flex items-center justify-between gap-4 py-2">
+              <div className="flex items-center gap-3 text-slate-500">
+                <div className="flex size-8 items-center justify-center rounded-full bg-slate-100 text-[#0f2a56]">
+                  <UserRound className="size-4" />
+                </div>
+
+                <span className="text-sm sm:text-base">
+                  Chủ hụi
+                </span>
+              </div>
+
+              <span className="text-right text-sm font-bold text-[#0f2a56] sm:text-base">
+                {settings.owner_name ||
+                  "Chưa khai báo"}
+              </span>
+            </div>
+
+            <div className="border-t border-slate-100" />
+
+            <div className="flex items-center justify-between gap-4 py-2">
+              <div className="flex items-center gap-3 text-slate-500">
+                <div className="flex size-8 items-center justify-center rounded-full bg-slate-100 text-[#0f2a56]">
+                  <Phone className="size-4" />
+                </div>
+
+                <span className="text-sm sm:text-base">
+                  SĐT
+                </span>
+              </div>
+
+              <span className="text-right text-sm font-bold text-[#0f2a56] sm:text-base">
+                {settings.owner_phone ||
+                  "Chưa khai báo"}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* CHI TIẾT */}
+        <div className="border-t border-slate-200 p-5 sm:p-6">
+          <div className="mb-4 flex items-center gap-2 text-[#0f2a56]">
+            <CircleDollarSign className="size-5" />
+
+            <h3 className="text-lg font-bold">
+              Chi tiết hụi
+            </h3>
+          </div>
+
+          <div className="space-y-4">
+            {receipt.lines.map(
+              (line) => (
+                <div
+                  key={line.periodId}
+                  className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                >
+                  <div className="h-1.5 bg-[#0f2a56]" />
+
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+                      <div className="min-w-0">
+                        <p className="font-bold text-[#0f2a56]">
+                          {line.groupCode
+                            ? `${line.groupCode} · ${line.groupName}`
+                            : line.groupName}
+                        </p>
+                      </div>
+
+                      <p className="shrink-0 text-sm font-bold text-[#0f2a56]">
+                        Kỳ{" "}
+                        {line.periodNumber}/
+                        {line.totalPeriods}
+                      </p>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[190px_minmax(0,1fr)]">
+                      {/* 2 Ô CHÂN */}
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+                          <div className="flex items-center gap-2 text-emerald-700">
+                            <UsersRound className="size-4" />
+
+                            <span className="text-xs font-semibold">
+                              Chân sống
+                            </span>
+                          </div>
+
+                          <p className="mt-1 text-2xl font-black text-emerald-700">
+                            {line.liveShares}
+                          </p>
+                        </div>
+
+                        <div className="rounded-lg border border-red-200 bg-red-50/60 p-3">
+                          <div className="flex items-center gap-2 text-red-600">
+                            <UserRound className="size-4" />
+
+                            <span className="text-xs font-semibold">
+                              Chân chết
+                            </span>
+                          </div>
+
+                          <p className="mt-1 text-2xl font-black text-red-600">
+                            {line.deadShares}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* TIỀN CỦA DÂY */}
+                      <div className="space-y-2 text-sm sm:text-base">
+                        <ReceiptMoneyRow
+                          label="Giá thăm"
+                          value={formatVND(
+                            line.bidAmount,
+                          )}
+                        />
+
+                        {line.payAmount >
+                          0 && (
+                          <ReceiptMoneyRow
+                            label="Tiền đóng"
+                            value={formatVND(
+                              line.payAmount,
+                            )}
+                          />
+                        )}
+
+                        {line.huiAmount >
+                          0 && (
+                          <>
+                            <ReceiptMoneyRow
+                              label="Hốt hụi"
+                              value={formatVND(
+                                line.huiAmount,
+                              )}
+                            />
+
+                            {line.feeAmount >
+                              0 && (
+                              <ReceiptMoneyRow
+                                label="Tiền thảo"
+                                value={`−${formatVND(
+                                  line.feeAmount,
+                                )}`}
+                                negative
+                              />
+                            )}
+
+                            <div className="border-t border-slate-200 pt-2">
+                              <ReceiptMoneyRow
+                                label="Thực nhận"
+                                value={formatVND(
+                                  line.receiveAmount,
+                                )}
+                                strong
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
+        </div>
+
+        {/* TỔNG KẾT */}
+        <div className="border-t border-slate-200 bg-slate-50/60 p-5 sm:p-6">
+          <h3 className="mb-3 text-lg font-bold text-[#0f2a56]">
             Tổng kết
           </h3>
 
-          <div className="space-y-2 text-sm">
+          <div className="space-y-2 text-sm sm:text-base">
             {receipt.totalPay > 0 && (
-              <TotalRow
+              <ReceiptMoneyRow
                 label="Tổng tiền đóng hụi"
-                value={
-                  receipt.totalPay
-                }
+                value={formatVND(
+                  receipt.totalPay,
+                )}
               />
             )}
 
             {receipt.totalHuiAmount >
               0 && (
-              <TotalRow
+              <ReceiptMoneyRow
                 label="Tổng hốt hụi"
-                value={
-                  receipt.totalHuiAmount
-                }
+                value={formatVND(
+                  receipt.totalHuiAmount,
+                )}
               />
             )}
 
             {receipt.totalFee > 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-muted-foreground">
-                  Trừ tiền thảo
-                </span>
-
-                <span className="shrink-0 font-semibold">
-                  −
-                  {formatVND(
-                    receipt.totalFee,
-                  )}
-                </span>
-              </div>
+              <ReceiptMoneyRow
+                label="Trừ tiền thảo"
+                value={`−${formatVND(
+                  receipt.totalFee,
+                )}`}
+                negative
+              />
             )}
 
             {receipt.settlementAmount !==
               0 && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-muted-foreground">
-                  Tất toán / điều chỉnh
-                </span>
-
-                <span className="shrink-0 font-semibold">
-                  {receipt
+              <ReceiptMoneyRow
+                label="Tất toán / điều chỉnh"
+                value={`${
+                  receipt
                     .settlementAmount >
                   0
                     ? "+"
-                    : "−"}
-                  {formatVND(
-                    Math.abs(
-                      receipt.settlementAmount,
-                    ),
-                  )}
-                </span>
-              </div>
+                    : "−"
+                }${formatVND(
+                  Math.abs(
+                    receipt.settlementAmount,
+                  ),
+                )}`}
+              />
             )}
 
-            {receipt.paidAmount > 0 && (
-              <TotalRow
+            {receipt.paidAmount >
+              0 && (
+              <ReceiptMoneyRow
                 label="Đã thu / chi"
-                value={
-                  receipt.paidAmount
-                }
+                value={formatVND(
+                  receipt.paidAmount,
+                )}
               />
+            )}
+
+            {receipt.totalReceive >
+              0 && (
+              <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
+                <ReceiptMoneyRow
+                  label="Thực nhận sau tiền thảo"
+                  value={formatVND(
+                    receipt.totalReceive,
+                  )}
+                  strong
+                />
+              </div>
             )}
           </div>
         </div>
 
+        {/* QR CHỈ PHIẾU THU */}
         {qrUrl &&
           receipt.status !==
             "cancelled" && (
-            <div className="border-t p-4 text-center sm:p-5">
-              <p className="font-semibold">
-                Quét QR để đóng đúng số tiền
-              </p>
+            <div className="border-t border-slate-200 p-5 text-center sm:p-6">
+              <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-4">
+                <p className="font-bold text-[#0f2a56]">
+                  Quét QR để đóng đúng số tiền
+                </p>
 
-              <p className="mt-1 text-xs text-muted-foreground">
-                {settings.bank_name} ·{" "}
-                {
-                  settings.bank_account_number
-                }
-              </p>
+                {/*
+                  Không hiện:
+                  BIDV · 0931425905
 
-              <img
-                src={qrUrl}
-                alt={`QR đóng hụi ${receipt.member.full_name}`}
-                className="mx-auto mt-3 w-full max-w-[300px] rounded-lg border"
-              />
+                  img dùng width + h-auto,
+                  giữ đúng tỷ lệ gốc VietQR.
+                */}
+                <img
+                  src={qrUrl}
+                  alt={`QR đóng hụi ${receipt.member.full_name}`}
+                  className="mx-auto mt-4 h-auto w-full max-w-[300px]"
+                />
 
-              <p className="mt-2 text-xs text-muted-foreground">
-                Nội dung:{" "}
-                {transferText(
-                  receipt,
-                  date,
-                )}
-              </p>
+                <p className="mt-3 text-sm text-slate-500">
+                  Nội dung:{" "}
+                  <span className="font-semibold text-[#0f2a56]">
+                    {transferText(
+                      receipt,
+                      date,
+                    )}
+                  </span>
+                </p>
+              </div>
             </div>
           )}
       </Card>
 
+      {/* THAO TÁC */}
       {receipt.status !==
         "cancelled" && (
-        <Card className="space-y-4 p-4">
+        <Card className="space-y-4 border-slate-200 p-4 shadow-sm">
           {receipt.direction !==
             "balanced" &&
             receipt.remainingAmount >
               0 && (
               <div>
-                <p className="mb-2 text-sm font-semibold">
+                <p className="mb-2 text-sm font-semibold text-slate-800">
                   Xác nhận tiền
                 </p>
 
@@ -2788,11 +3374,11 @@ function ReceiptPreview({
                 "balanced" &&
               receipt.remainingAmount >
                 0
-                ? "border-t pt-4"
+                ? "border-t border-slate-200 pt-4"
                 : ""
             }
           >
-            <p className="mb-2 text-sm font-semibold">
+            <p className="mb-2 text-sm font-semibold text-slate-800">
               Chia sẻ phiếu
             </p>
 
@@ -2803,7 +3389,8 @@ function ReceiptPreview({
                   void handleDownloadJpg()
                 }
                 disabled={
-                  working || exporting
+                  working ||
+                  exporting
                 }
               >
                 {exporting ? (
@@ -2821,7 +3408,8 @@ function ReceiptPreview({
                   void handleShareZalo()
                 }
                 disabled={
-                  working || exporting
+                  working ||
+                  exporting
                 }
               >
                 {exporting ? (
@@ -2839,8 +3427,8 @@ function ReceiptPreview({
             </p>
           </div>
 
-          <div className="border-t pt-4">
-            <p className="mb-2 text-sm font-semibold">
+          <div className="border-t border-slate-200 pt-4">
+            <p className="mb-2 text-sm font-semibold text-slate-800">
               Điều chỉnh
             </p>
 
@@ -2849,7 +3437,8 @@ function ReceiptPreview({
                 variant="outline"
                 onClick={onEdit}
                 disabled={
-                  working || exporting
+                  working ||
+                  exporting
                 }
               >
                 <Pencil className="size-4" />
@@ -2861,7 +3450,8 @@ function ReceiptPreview({
                 className="text-destructive"
                 onClick={onCancel}
                 disabled={
-                  working || exporting
+                  working ||
+                  exporting
                 }
               >
                 <Ban className="size-4" />
@@ -2872,8 +3462,9 @@ function ReceiptPreview({
         </Card>
       )}
 
-      <Card className="p-4">
-        <div className="flex items-center gap-2">
+      {/* LỊCH SỬ */}
+      <Card className="border-slate-200 p-4 shadow-sm">
+        <div className="flex items-center gap-2 text-[#0f2a56]">
           <History className="size-4" />
 
           <h3 className="font-semibold">
@@ -2892,7 +3483,7 @@ function ReceiptPreview({
               (payment) => (
                 <div
                   key={payment.id}
-                  className={`rounded-md border p-3 text-sm ${
+                  className={`rounded-md border border-slate-200 p-3 text-sm ${
                     payment.status ===
                     "cancelled"
                       ? "opacity-50"
@@ -2968,6 +3559,44 @@ function ReceiptPreview({
           </div>
         )}
       </Card>
+    </div>
+  )
+}
+
+function ReceiptMoneyRow({
+  label,
+  value,
+  negative = false,
+  strong = false,
+}: {
+  label: string
+  value: string
+  negative?: boolean
+  strong?: boolean
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <span
+        className={
+          strong
+            ? "font-bold text-[#0f2a56]"
+            : "text-slate-500"
+        }
+      >
+        {label}
+      </span>
+
+      <span
+        className={`shrink-0 text-right tabular-nums ${
+          negative
+            ? "font-bold text-red-600"
+            : strong
+              ? "font-extrabold text-[#0f2a56]"
+              : "font-bold text-slate-900"
+        }`}
+      >
+        {value}
+      </span>
     </div>
   )
 }
