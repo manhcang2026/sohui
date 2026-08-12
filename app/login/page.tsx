@@ -38,6 +38,7 @@ export default function LoginPage() {
         headers: {
           "Content-Type": "application/json",
         },
+        cache: "no-store",
         body: JSON.stringify({
           phone: normalizedPhone,
           pin,
@@ -64,8 +65,9 @@ export default function LoginPage() {
         return
       }
 
+      // replace đã đủ để mount trang chủ với session vừa lưu.
+      // Không refresh thêm ngay sau đó vì sẽ tạo một lượt tải trùng.
       router.replace("/")
-      router.refresh()
     } catch (caught) {
       console.error(caught)
       setError(
