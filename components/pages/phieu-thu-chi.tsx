@@ -439,20 +439,39 @@ async function createReceiptJpeg(
   const width = 1080
   const margin = 55
   const contentWidth = width - margin * 2
-
-  const lineHeight = 245
   const qrUrl = vietQrUrl(settings, receipt, date)
+
+  const visibleTotalRows = [
+    receipt.totalPay > 0,
+    receipt.totalHuiAmount > 0,
+    receipt.totalFee > 0,
+    receipt.settlementAmount !== 0,
+    receipt.paidAmount > 0,
+  ].filter(Boolean).length
+
+  const detailHeights = receipt.lines.map((line) =>
+    line.huiAmount > 0 ? 275 : 210,
+  )
+
+  const detailsHeight = detailHeights.reduce(
+    (total, current) => total + current,
+    0,
+  )
+
+  const totalsHeight =
+    85 + visibleTotalRows * 50
 
   const qrSectionHeight = qrUrl ? 500 : 0
 
   const height =
-    310 +
-    170 +
-    90 +
-    receipt.lines.length * lineHeight +
-    390 +
+    235 +
+    150 +
+    135 +
+    75 +
+    detailsHeight +
+    totalsHeight +
     qrSectionHeight +
-    70
+    100
 
   const canvas = document.createElement("canvas")
   canvas.width = width
@@ -461,7 +480,9 @@ async function createReceiptJpeg(
   const ctx = canvas.getContext("2d")
 
   if (!ctx) {
-    throw new Error("Trình duyệt không hỗ trợ Canvas")
+    throw new Error(
+      "Trình duyệt không hỗ trợ Canvas",
+    )
   }
 
   ctx.fillStyle = "#ffffff"
@@ -477,50 +498,122 @@ async function createReceiptJpeg(
    */
   ctx.fillStyle = "#111827"
   ctx.textAlign = "center"
-  ctx.font = "700 42px Arial, sans-serif"
-  ctx.fillText("PHIẾU THU / CHI HỤI", width / 2, y)
+  ctx.font = "700 40px Arial, sans-serif"
+  ctx.fillText(
+    "PHIẾU HỤI",
+    width / 2,
+    y,
+  )
 
-  y += 65
+  y += 48
 
+  ctx.font = "700 31px Arial, sans-serif"
+  ctx.fillText(
+    receipt.member.full_name,
+    width / 2,
+    y,
+  )
+
+  y += 38
+
+  ctx.fillStyle = "#6b7280"
+  ctx.font = "23px Arial, sans-serif"
+
+  ctx.fillText(
+    formatDate(date),
+    width / 2,
+    y,
+  )
+
+  /*
+   * SỐ TIỀN CẦN XỬ LÝ
+   */
+  y += 38
+
+  let actionLabel = "ĐÃ CÂN BẰNG"
+  let actionAmount =
+    formatVND(receipt.remainingAmount)
+  let actionColor = "#374151"
+  let actionSubtext = ""
+
+  if (receipt.status === "cancelled") {
+    actionLabel = "PHIẾU ĐÃ HỦY"
+    actionAmount = "—"
+  } else if (receipt.remainingAmount <= 0) {
+    actionLabel = "ĐÃ THANH TOÁN ĐỦ"
+    actionAmount = formatVND(0)
+  } else if (receipt.direction === "collect") {
+    actionLabel = "CẦN THU"
+    actionAmount = `+${formatVND(
+      receipt.remainingAmount,
+    )}`
+    actionColor = "#047857"
+    actionSubtext =
+      "Hụi viên đóng cho chủ hụi"
+  } else if (receipt.direction === "pay") {
+    actionLabel = "CẦN CHI"
+    actionAmount = `−${formatVND(
+      receipt.remainingAmount,
+    )}`
+    actionColor = "#dc2626"
+    actionSubtext =
+      "Chủ hụi giao cho hụi viên"
+  }
+
+  ctx.fillStyle = "#f9fafb"
+
+  roundedRect(
+    ctx,
+    margin,
+    y,
+    contentWidth,
+    130,
+    18,
+  )
+
+  ctx.fill()
+
+  ctx.fillStyle = actionColor
+  ctx.textAlign = "center"
+  ctx.font = "700 25px Arial, sans-serif"
+
+  ctx.fillText(
+    actionLabel,
+    width / 2,
+    y + 35,
+  )
+
+  ctx.font = "800 46px Arial, sans-serif"
+
+  ctx.fillText(
+    actionAmount,
+    width / 2,
+    y + 85,
+  )
+
+  if (actionSubtext) {
+    ctx.fillStyle = "#6b7280"
+    ctx.font = "21px Arial, sans-serif"
+
+    ctx.fillText(
+      actionSubtext,
+      width / 2,
+      y + 116,
+    )
+  }
+
+  y += 160
+
+  /*
+   * CHỦ HỤI
+   */
   ctx.textAlign = "left"
 
   drawLabelValue(
     ctx,
     "Chủ hụi",
-    settings.owner_name || "Chưa khai báo",
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "SĐT chủ hụi",
-    settings.owner_phone || "Chưa khai báo",
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "Tên hụi viên",
-    receipt.member.full_name,
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "Ngày lập phiếu",
-    formatDate(date),
+    settings.owner_name ||
+      "Chưa khai báo",
     margin,
     y,
     contentWidth,
@@ -528,16 +621,34 @@ async function createReceiptJpeg(
 
   y += 45
 
-  drawLine(ctx, margin, y, width - margin, y)
+  drawLabelValue(
+    ctx,
+    "SĐT",
+    settings.owner_phone ||
+      "Chưa khai báo",
+    margin,
+    y,
+    contentWidth,
+  )
+
+  y += 45
+
+  drawLine(
+    ctx,
+    margin,
+    y,
+    width - margin,
+    y,
+  )
 
   /*
    * TỔNG QUAN
    */
-  y += 35
+  y += 30
 
-  const gap = 16
-  const boxWidth = (contentWidth - gap) / 2
-  const boxHeight = 92
+  const gap = 14
+  const summaryWidth =
+    (contentWidth - gap * 3) / 4
 
   drawSummaryBox(
     ctx,
@@ -545,56 +656,67 @@ async function createReceiptJpeg(
     String(receipt.groupCount),
     margin,
     y,
-    boxWidth,
-    boxHeight,
+    summaryWidth,
+    90,
   )
 
   drawSummaryBox(
     ctx,
     "Số chân",
     String(receipt.totalShares),
-    margin + boxWidth + gap,
+    margin + summaryWidth + gap,
     y,
-    boxWidth,
-    boxHeight,
+    summaryWidth,
+    90,
   )
-
-  y += boxHeight + 16
 
   drawSummaryBox(
     ctx,
     "Chân sống",
     String(receipt.liveShares),
-    margin,
+    margin +
+      (summaryWidth + gap) * 2,
     y,
-    boxWidth,
-    boxHeight,
+    summaryWidth,
+    90,
   )
 
   drawSummaryBox(
     ctx,
     "Chân chết",
     String(receipt.deadShares),
-    margin + boxWidth + gap,
+    margin +
+      (summaryWidth + gap) * 3,
     y,
-    boxWidth,
-    boxHeight,
+    summaryWidth,
+    90,
   )
 
-  y += boxHeight + 40
+  y += 125
 
   /*
    * CHI TIẾT
    */
   ctx.fillStyle = "#111827"
   ctx.textAlign = "left"
-  ctx.font = "700 30px Arial, sans-serif"
-  ctx.fillText("Chi tiết nhận / đóng tiền", margin, y)
+  ctx.font = "700 28px Arial, sans-serif"
 
-  y += 35
+  ctx.fillText(
+    "Chi tiết hụi",
+    margin,
+    y,
+  )
 
-  for (let index = 0; index < receipt.lines.length; index++) {
+  y += 30
+
+  for (
+    let index = 0;
+    index < receipt.lines.length;
+    index++
+  ) {
     const line = receipt.lines[index]
+    const boxHeight =
+      detailHeights[index] - 18
 
     y += 15
 
@@ -606,7 +728,7 @@ async function createReceiptJpeg(
       margin,
       y,
       contentWidth,
-      lineHeight - 20,
+      boxHeight,
       16,
     )
 
@@ -614,41 +736,50 @@ async function createReceiptJpeg(
 
     ctx.fillStyle = "#111827"
     ctx.textAlign = "left"
-    ctx.font = "700 28px Arial, sans-serif"
+    ctx.font = "700 27px Arial, sans-serif"
 
-    const title = `${index + 1}. ${line.groupName}`
-
-    ctx.fillText(title, margin + 22, y + 42)
+    ctx.fillText(
+      `${index + 1}. ${line.groupName}`,
+      margin + 22,
+      y + 40,
+    )
 
     ctx.textAlign = "right"
-    ctx.font = "700 25px Arial, sans-serif"
+    ctx.font = "700 24px Arial, sans-serif"
 
     ctx.fillText(
       `Kỳ ${line.periodNumber}/${line.totalPeriods}`,
       width - margin - 22,
-      y + 42,
+      y + 40,
     )
 
+    ctx.fillStyle = "#6b7280"
+    ctx.textAlign = "left"
+    ctx.font = "21px Arial, sans-serif"
+
     if (line.groupCode) {
-      ctx.fillStyle = "#6b7280"
-      ctx.textAlign = "left"
-      ctx.font = "22px Arial, sans-serif"
-      ctx.fillText(line.groupCode, margin + 22, y + 76)
+      ctx.fillText(
+        line.groupCode,
+        margin + 22,
+        y + 72,
+      )
     }
 
     drawLine(
       ctx,
       margin + 20,
-      y + 96,
+      y + 92,
       width - margin - 20,
-      y + 96,
+      y + 92,
     )
 
     const leftX = margin + 22
-    const rightX = margin + contentWidth / 2 + 20
-    const valueWidth = contentWidth / 2 - 44
+    const rightX =
+      margin + contentWidth / 2 + 18
+    const columnWidth =
+      contentWidth / 2 - 42
 
-    let detailY = y + 138
+    let detailY = y + 134
 
     drawLabelValue(
       ctx,
@@ -656,7 +787,7 @@ async function createReceiptJpeg(
       formatVND(line.bidAmount),
       leftX,
       detailY,
-      valueWidth,
+      columnWidth,
     )
 
     drawLabelValue(
@@ -665,168 +796,203 @@ async function createReceiptJpeg(
       `${line.liveShares} / ${line.deadShares}`,
       rightX,
       detailY,
-      valueWidth,
+      columnWidth,
     )
 
-    detailY += 44
-
-    drawLabelValue(
-      ctx,
-      "Tiền đóng",
-      formatVND(line.payAmount),
-      leftX,
-      detailY,
-      valueWidth,
-    )
-
-    drawLabelValue(
-      ctx,
-      "Tổng hốt hụi",
-      formatVND(line.huiAmount),
-      rightX,
-      detailY,
-      valueWidth,
-    )
-
-    if (line.feeAmount > 0) {
-      detailY += 44
+    if (line.payAmount > 0) {
+      detailY += 43
 
       drawLabelValue(
         ctx,
-        "Trừ tiền thảo",
-        formatVND(line.feeAmount),
+        "Tiền đóng",
+        formatVND(line.payAmount),
         leftX,
         detailY,
         contentWidth - 44,
       )
     }
 
-    y += lineHeight
+    if (line.huiAmount > 0) {
+      detailY += 43
+
+      drawLabelValue(
+        ctx,
+        "Hốt hụi",
+        formatVND(line.huiAmount),
+        leftX,
+        detailY,
+        contentWidth - 44,
+      )
+
+      if (line.feeAmount > 0) {
+        detailY += 43
+
+        drawLabelValue(
+          ctx,
+          "Trừ tiền thảo",
+          `−${formatVND(
+            line.feeAmount,
+          )}`,
+          leftX,
+          detailY,
+          contentWidth - 44,
+        )
+      }
+
+      detailY += 43
+
+      drawLabelValue(
+        ctx,
+        "Thực nhận sau tiền thảo",
+        formatVND(line.receiveAmount),
+        leftX,
+        detailY,
+        contentWidth - 44,
+      )
+    }
+
+    y += boxHeight + 8
   }
 
   /*
    * TỔNG CỘNG
    */
-  y += 15
+  y += 25
 
-  drawLine(ctx, margin, y, width - margin, y)
-
-  y += 48
-
-  drawLabelValue(
+  drawLine(
     ctx,
-    "Tổng tiền đóng hụi",
-    formatVND(receipt.totalPay),
     margin,
     y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "Tổng hốt hụi",
-    formatVND(receipt.totalHuiAmount),
-    margin,
+    width - margin,
     y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "Trừ tiền thảo",
-    formatVND(receipt.totalFee),
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "Tất toán / điều chỉnh",
-    `${receipt.settlementAmount > 0 ? "+" : ""}${formatVND(
-      receipt.settlementAmount,
-    )}`,
-    margin,
-    y,
-    contentWidth,
-  )
-
-  y += 48
-
-  drawLabelValue(
-    ctx,
-    "Đã thu / chi",
-    formatVND(receipt.paidAmount),
-    margin,
-    y,
-    contentWidth,
   )
 
   y += 45
 
-  drawLine(ctx, margin, y, width - margin, y)
-
-  y += 55
-
-  let finalLabel = "PHIẾU ĐÃ CÂN BẰNG"
-
-  if (receipt.status === "cancelled") {
-    finalLabel = "PHIẾU ĐÃ HỦY"
-  } else if (receipt.remainingAmount <= 0) {
-    finalLabel = "ĐÃ THANH TOÁN ĐỦ"
-  } else if (receipt.direction === "collect") {
-    finalLabel = "HỤI VIÊN CÒN PHẢI ĐÓNG CHO CHỦ HỤI"
-  } else if (receipt.direction === "pay") {
-    finalLabel = "CHỦ HỤI CÒN PHẢI GIAO CHO HỤI VIÊN"
-  }
-
   ctx.fillStyle = "#111827"
-  ctx.textAlign = "center"
-  ctx.font = "700 27px Arial, sans-serif"
-  ctx.fillText(finalLabel, width / 2, y)
+  ctx.textAlign = "left"
+  ctx.font = "700 28px Arial, sans-serif"
 
-  y += 58
-
-  ctx.font = "800 47px Arial, sans-serif"
   ctx.fillText(
-    formatVND(receipt.remainingAmount),
-    width / 2,
+    "Tổng kết",
+    margin,
     y,
   )
 
-  y += 65
+  y += 45
+
+  if (receipt.totalPay > 0) {
+    drawLabelValue(
+      ctx,
+      "Tổng tiền đóng hụi",
+      formatVND(receipt.totalPay),
+      margin,
+      y,
+      contentWidth,
+    )
+
+    y += 48
+  }
+
+  if (receipt.totalHuiAmount > 0) {
+    drawLabelValue(
+      ctx,
+      "Tổng hốt hụi",
+      formatVND(
+        receipt.totalHuiAmount,
+      ),
+      margin,
+      y,
+      contentWidth,
+    )
+
+    y += 48
+  }
+
+  if (receipt.totalFee > 0) {
+    drawLabelValue(
+      ctx,
+      "Trừ tiền thảo",
+      `−${formatVND(
+        receipt.totalFee,
+      )}`,
+      margin,
+      y,
+      contentWidth,
+    )
+
+    y += 48
+  }
+
+  if (receipt.settlementAmount !== 0) {
+    drawLabelValue(
+      ctx,
+      "Tất toán / điều chỉnh",
+      `${
+        receipt.settlementAmount > 0
+          ? "+"
+          : "−"
+      }${formatVND(
+        Math.abs(
+          receipt.settlementAmount,
+        ),
+      )}`,
+      margin,
+      y,
+      contentWidth,
+    )
+
+    y += 48
+  }
+
+  if (receipt.paidAmount > 0) {
+    drawLabelValue(
+      ctx,
+      "Đã thu / chi",
+      formatVND(
+        receipt.paidAmount,
+      ),
+      margin,
+      y,
+      contentWidth,
+    )
+
+    y += 48
+  }
 
   /*
-   * QR CHUYỂN KHOẢN
+   * QR
    */
   if (
     qrUrl &&
     receipt.status !== "cancelled"
   ) {
-    drawLine(ctx, margin, y, width - margin, y)
+    y += 18
 
-    y += 48
+    drawLine(
+      ctx,
+      margin,
+      y,
+      width - margin,
+      y,
+    )
+
+    y += 45
 
     ctx.fillStyle = "#111827"
-    ctx.font = "700 29px Arial, sans-serif"
     ctx.textAlign = "center"
+    ctx.font = "700 27px Arial, sans-serif"
 
     ctx.fillText(
-      "Quét QR để đóng đúng số tiền còn lại",
+      "Quét QR để đóng đúng số tiền",
       width / 2,
       y,
     )
 
-    y += 42
+    y += 37
 
     ctx.fillStyle = "#6b7280"
-    ctx.font = "23px Arial, sans-serif"
+    ctx.font = "21px Arial, sans-serif"
 
     ctx.fillText(
       `${settings.bank_name} · ${settings.bank_account_number}`,
@@ -834,10 +1000,11 @@ async function createReceiptJpeg(
       y,
     )
 
-    y += 30
+    y += 28
 
     try {
-      const qrImage = await loadImage(qrUrl)
+      const qrImage =
+        await loadImage(qrUrl)
 
       const qrSize = 330
 
@@ -849,12 +1016,12 @@ async function createReceiptJpeg(
         qrSize,
       )
 
-      y += qrSize + 40
+      y += qrSize + 35
     } catch (error) {
       console.error(error)
 
       ctx.fillStyle = "#6b7280"
-      ctx.font = "23px Arial, sans-serif"
+      ctx.font = "22px Arial, sans-serif"
 
       ctx.fillText(
         "Không tải được ảnh QR",
@@ -866,10 +1033,13 @@ async function createReceiptJpeg(
     }
 
     ctx.fillStyle = "#374151"
-    ctx.font = "23px Arial, sans-serif"
+    ctx.font = "22px Arial, sans-serif"
 
     ctx.fillText(
-      `Nội dung: ${transferText(receipt, date)}`,
+      `Nội dung: ${transferText(
+        receipt,
+        date,
+      )}`,
       width / 2,
       y,
     )
@@ -877,7 +1047,10 @@ async function createReceiptJpeg(
 
   return canvasToJpegFile(
     canvas,
-    receiptFileName(receipt, date),
+    receiptFileName(
+      receipt,
+      date,
+    ),
   )
 }
 
@@ -2110,17 +2283,67 @@ function ReceiptPreview({
     date,
   )
 
+  const cancelled =
+    receipt.status === "cancelled"
+
+  const finished =
+    !cancelled &&
+    receipt.remainingAmount <= 0
+
+  const actionLabel = cancelled
+    ? "Phiếu đã hủy"
+    : finished
+      ? "Đã thanh toán đủ"
+      : receipt.direction === "collect"
+        ? "Cần thu"
+        : receipt.direction === "pay"
+          ? "Cần chi"
+          : "Đã cân bằng"
+
+  const actionDescription =
+    receipt.direction === "collect"
+      ? "Hụi viên đóng cho chủ hụi"
+      : receipt.direction === "pay"
+        ? "Chủ hụi giao cho hụi viên"
+        : ""
+
+  const actionAmount = cancelled
+    ? "—"
+    : receipt.direction === "collect" &&
+        receipt.remainingAmount > 0
+      ? `+${formatVND(
+          receipt.remainingAmount,
+        )}`
+      : receipt.direction === "pay" &&
+          receipt.remainingAmount > 0
+        ? `−${formatVND(
+            receipt.remainingAmount,
+          )}`
+        : formatVND(
+            receipt.remainingAmount,
+          )
+
+  const actionColor =
+    cancelled || finished
+      ? "text-muted-foreground"
+      : receipt.direction === "collect"
+        ? "text-emerald-700"
+        : receipt.direction === "pay"
+          ? "text-red-600"
+          : "text-muted-foreground"
+
   async function handleDownloadJpg() {
     if (exporting) return
 
     setExporting(true)
 
     try {
-      const file = await createReceiptJpeg(
-        receipt,
-        date,
-        settings,
-      )
+      const file =
+        await createReceiptJpeg(
+          receipt,
+          date,
+          settings,
+        )
 
       downloadFile(file)
     } catch (e) {
@@ -2140,11 +2363,12 @@ function ReceiptPreview({
     setExporting(true)
 
     try {
-      const file = await createReceiptJpeg(
-        receipt,
-        date,
-        settings,
-      )
+      const file =
+        await createReceiptJpeg(
+          receipt,
+          date,
+          settings,
+        )
 
       const action =
         receipt.direction === "collect"
@@ -2221,18 +2445,52 @@ function ReceiptPreview({
           </h1>
 
           <p className="text-sm text-muted-foreground">
-            {receiptStatusLabel(receipt.status)}
+            {receiptStatusLabel(
+              receipt.status,
+            )}
           </p>
         </div>
       </div>
 
       <Card className="overflow-hidden">
-        <div className="border-b p-4 sm:p-5">
-          <h2 className="text-center text-xl font-bold">
-            PHIẾU THU / CHI HỤI
+        <div className="border-b p-4 text-center sm:p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Phiếu hụi
+          </p>
+
+          <h2 className="mt-1 text-xl font-bold">
+            {receipt.member.full_name}
           </h2>
 
-          <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+          <p className="mt-1 text-sm text-muted-foreground">
+            {formatDate(date)}
+          </p>
+
+          <div className="mt-4 rounded-lg bg-muted/40 px-4 py-4">
+            <p
+              className={`text-sm font-bold uppercase ${actionColor}`}
+            >
+              {actionLabel}
+            </p>
+
+            <p
+              className={`mt-1 text-3xl font-black tabular-nums ${actionColor}`}
+            >
+              {actionAmount}
+            </p>
+
+            {actionDescription &&
+              !finished &&
+              !cancelled && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {actionDescription}
+                </p>
+              )}
+          </div>
+        </div>
+
+        <div className="border-b p-4 sm:p-5">
+          <div className="grid gap-2 text-sm sm:grid-cols-2">
             <InfoRow
               label="Chủ hụi"
               value={
@@ -2242,21 +2500,11 @@ function ReceiptPreview({
             />
 
             <InfoRow
-              label="SĐT chủ hụi"
+              label="SĐT"
               value={
                 settings.owner_phone ||
                 "Chưa khai báo"
               }
-            />
-
-            <InfoRow
-              label="Tên hụi viên"
-              value={receipt.member.full_name}
-            />
-
-            <InfoRow
-              label="Ngày lập phiếu"
-              value={formatDate(date)}
             />
           </div>
         </div>
@@ -2265,263 +2513,362 @@ function ReceiptPreview({
           <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
             <SummaryCell
               label="Số dây"
-              value={String(receipt.groupCount)}
+              value={String(
+                receipt.groupCount,
+              )}
             />
 
             <SummaryCell
               label="Số chân"
-              value={String(receipt.totalShares)}
+              value={String(
+                receipt.totalShares,
+              )}
             />
 
             <SummaryCell
               label="Chân sống"
-              value={String(receipt.liveShares)}
+              value={String(
+                receipt.liveShares,
+              )}
             />
 
             <SummaryCell
               label="Chân chết"
-              value={String(receipt.deadShares)}
+              value={String(
+                receipt.deadShares,
+              )}
             />
           </div>
         </div>
 
         <div className="space-y-3 p-4 sm:p-5">
           <h3 className="font-bold">
-            Chi tiết nhận / đóng tiền
+            Chi tiết hụi
           </h3>
 
-          {receipt.lines.map((line, index) => (
-            <div
-              key={line.periodId}
-              className="rounded-lg border p-3.5"
-            >
-              <div className="flex items-start justify-between gap-3 border-b pb-2.5">
-                <div className="min-w-0">
-                  <p className="font-semibold">
-                    {index + 1}. {line.groupName}
-                  </p>
-
-                  {line.groupCode && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {line.groupCode}
+          {receipt.lines.map(
+            (line, index) => (
+              <div
+                key={line.periodId}
+                className="rounded-lg border p-3.5"
+              >
+                <div className="flex items-start justify-between gap-3 border-b pb-2.5">
+                  <div className="min-w-0">
+                    <p className="font-semibold">
+                      {index + 1}.{" "}
+                      {line.groupName}
                     </p>
-                  )}
+
+                    {line.groupCode && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {line.groupCode}
+                      </p>
+                    )}
+                  </div>
+
+                  <p className="shrink-0 text-sm font-semibold">
+                    Kỳ{" "}
+                    {line.periodNumber}/
+                    {line.totalPeriods}
+                  </p>
                 </div>
 
-                <p className="shrink-0 text-sm font-semibold">
-                  Kỳ {line.periodNumber}/
-                  {line.totalPeriods}
-                </p>
-              </div>
-
-              <div className="mt-3 grid gap-x-5 gap-y-2 text-sm sm:grid-cols-2">
-                <InfoRow
-                  label="Giá thăm"
-                  value={formatVND(
-                    line.bidAmount,
-                  )}
-                />
-
-                <InfoRow
-                  label="Chân sống / chết"
-                  value={`${line.liveShares} / ${line.deadShares}`}
-                />
-
-                <InfoRow
-                  label="Tiền đóng"
-                  value={formatVND(
-                    line.payAmount,
-                  )}
-                />
-
-                <InfoRow
-                  label="Tổng hốt hụi"
-                  value={formatVND(
-                    line.huiAmount,
-                  )}
-                />
-
-                {line.feeAmount > 0 && (
+                <div className="mt-3 grid gap-x-5 gap-y-2 text-sm sm:grid-cols-2">
                   <InfoRow
-                    label="Trừ tiền thảo"
+                    label="Giá thăm"
                     value={formatVND(
-                      line.feeAmount,
+                      line.bidAmount,
                     )}
                   />
-                )}
+
+                  <InfoRow
+                    label="Chân sống / chết"
+                    value={`${line.liveShares} / ${line.deadShares}`}
+                  />
+
+                  {line.payAmount > 0 && (
+                    <InfoRow
+                      label="Tiền đóng"
+                      value={formatVND(
+                        line.payAmount,
+                      )}
+                    />
+                  )}
+
+                  {line.huiAmount > 0 && (
+                    <>
+                      <InfoRow
+                        label="Hốt hụi"
+                        value={formatVND(
+                          line.huiAmount,
+                        )}
+                      />
+
+                      {line.feeAmount >
+                        0 && (
+                        <InfoRow
+                          label="Trừ tiền thảo"
+                          value={`−${formatVND(
+                            line.feeAmount,
+                          )}`}
+                        />
+                      )}
+
+                      <InfoRow
+                        label="Thực nhận sau tiền thảo"
+                        value={formatVND(
+                          line.receiveAmount,
+                        )}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ),
+          )}
         </div>
 
         <div className="border-t bg-muted/20 p-4 sm:p-5">
+          <h3 className="mb-3 font-semibold">
+            Tổng kết
+          </h3>
+
           <div className="space-y-2 text-sm">
-            <TotalRow
-              label="Tổng tiền đóng hụi"
-              value={receipt.totalPay}
-            />
+            {receipt.totalPay > 0 && (
+              <TotalRow
+                label="Tổng tiền đóng hụi"
+                value={
+                  receipt.totalPay
+                }
+              />
+            )}
 
-            <TotalRow
-              label="Tổng hốt hụi"
-              value={receipt.totalHuiAmount}
-            />
+            {receipt.totalHuiAmount >
+              0 && (
+              <TotalRow
+                label="Tổng hốt hụi"
+                value={
+                  receipt.totalHuiAmount
+                }
+              />
+            )}
 
-            <TotalRow
-              label="Trừ tiền thảo"
-              value={receipt.totalFee}
-            />
+            {receipt.totalFee > 0 && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">
+                  Trừ tiền thảo
+                </span>
 
-            <TotalRow
-              label="Tất toán / điều chỉnh"
-              value={receipt.settlementAmount}
-              signed
-            />
+                <span className="shrink-0 font-semibold">
+                  −
+                  {formatVND(
+                    receipt.totalFee,
+                  )}
+                </span>
+              </div>
+            )}
 
-            <TotalRow
-              label="Đã thu / chi"
-              value={receipt.paidAmount}
-            />
-          </div>
+            {receipt.settlementAmount !==
+              0 && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">
+                  Tất toán / điều chỉnh
+                </span>
 
-          <div className="mt-4 border-t pt-4 text-center">
-            <p className="text-sm font-bold uppercase">
-              {receipt.status === "cancelled"
-                ? "Phiếu đã hủy"
-                : receipt.remainingAmount <= 0
-                  ? "Đã thanh toán đủ"
-                  : receipt.direction === "collect"
-                    ? "Hụi viên còn phải đóng cho chủ hụi"
-                    : receipt.direction === "pay"
-                      ? "Chủ hụi còn phải giao cho hụi viên"
-                      : "Phiếu đã cân bằng"}
-            </p>
+                <span className="shrink-0 font-semibold">
+                  {receipt
+                    .settlementAmount >
+                  0
+                    ? "+"
+                    : "−"}
+                  {formatVND(
+                    Math.abs(
+                      receipt.settlementAmount,
+                    ),
+                  )}
+                </span>
+              </div>
+            )}
 
-            <p className="mt-1 text-2xl font-black">
-              {formatVND(
-                receipt.remainingAmount,
-              )}
-            </p>
+            {receipt.paidAmount > 0 && (
+              <TotalRow
+                label="Đã thu / chi"
+                value={
+                  receipt.paidAmount
+                }
+              />
+            )}
           </div>
         </div>
 
         {qrUrl &&
-          receipt.status !== "cancelled" && (
+          receipt.status !==
+            "cancelled" && (
             <div className="border-t p-4 text-center sm:p-5">
               <p className="font-semibold">
-                Quét QR để đóng đúng số tiền còn lại
+                Quét QR để đóng đúng số tiền
               </p>
 
               <p className="mt-1 text-xs text-muted-foreground">
                 {settings.bank_name} ·{" "}
-                {settings.bank_account_number}
+                {
+                  settings.bank_account_number
+                }
               </p>
 
               <img
                 src={qrUrl}
                 alt={`QR đóng hụi ${receipt.member.full_name}`}
-                className="mx-auto mt-3 w-full max-w-[320px] rounded-lg border"
+                className="mx-auto mt-3 w-full max-w-[300px] rounded-lg border"
               />
 
               <p className="mt-2 text-xs text-muted-foreground">
                 Nội dung:{" "}
-                {transferText(receipt, date)}
+                {transferText(
+                  receipt,
+                  date,
+                )}
               </p>
             </div>
           )}
       </Card>
 
-      {receipt.status !== "cancelled" && (
-        <Card className="space-y-3 p-4">
-          <h3 className="font-semibold">
-            Thao tác phiếu
-          </h3>
+      {receipt.status !==
+        "cancelled" && (
+        <Card className="space-y-4 p-4">
+          {receipt.direction !==
+            "balanced" &&
+            receipt.remainingAmount >
+              0 && (
+              <div>
+                <p className="mb-2 text-sm font-semibold">
+                  Xác nhận tiền
+                </p>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <Button
-              variant="outline"
-              onClick={() =>
-                void handleDownloadJpg()
-              }
-              disabled={working || exporting}
-            >
-              {exporting ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <Download className="size-4" />
-              )}
-
-              Xuất JPG
-            </Button>
-
-            <Button
-              variant="outline"
-              onClick={() =>
-                void handleShareZalo()
-              }
-              disabled={working || exporting}
-            >
-              {exporting ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <Share2 className="size-4" />
-              )}
-
-              Gửi Zalo
-            </Button>
-
-            {receipt.direction !== "balanced" &&
-              receipt.remainingAmount > 0 && (
-                <>
+                <div className="grid gap-2 sm:grid-cols-2">
                   <Button
+                    className="h-11"
                     onClick={onFull}
-                    disabled={working || exporting}
+                    disabled={
+                      working ||
+                      exporting
+                    }
                   >
                     <CheckCheck className="size-4" />
 
-                    {receipt.direction === "collect"
+                    {receipt.direction ===
+                    "collect"
                       ? "Đã thu đủ"
                       : "Đã chi đủ"}
                   </Button>
 
                   <Button
                     variant="outline"
+                    className="h-11"
                     onClick={onPartial}
-                    disabled={working || exporting}
+                    disabled={
+                      working ||
+                      exporting
+                    }
                   >
                     <CircleDollarSign className="size-4" />
 
-                    {receipt.direction === "collect"
+                    {receipt.direction ===
+                    "collect"
                       ? "Thu một phần"
                       : "Chi một phần"}
                   </Button>
-                </>
-              )}
+                </div>
+              </div>
+            )}
 
-            <Button
-              variant="outline"
-              onClick={onEdit}
-              disabled={working || exporting}
-            >
-              <Pencil className="size-4" />
-              Sửa / điều chỉnh
-            </Button>
+          <div
+            className={
+              receipt.direction !==
+                "balanced" &&
+              receipt.remainingAmount >
+                0
+                ? "border-t pt-4"
+                : ""
+            }
+          >
+            <p className="mb-2 text-sm font-semibold">
+              Chia sẻ phiếu
+            </p>
 
-            <Button
-              variant="outline"
-              className="text-destructive"
-              onClick={onCancel}
-              disabled={working || exporting}
-            >
-              <Ban className="size-4" />
-              Hủy phiếu
-            </Button>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  void handleDownloadJpg()
+                }
+                disabled={
+                  working || exporting
+                }
+              >
+                {exporting ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+
+                Xuất JPG
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={() =>
+                  void handleShareZalo()
+                }
+                disabled={
+                  working || exporting
+                }
+              >
+                {exporting ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Share2 className="size-4" />
+                )}
+
+                Gửi Zalo
+              </Button>
+            </div>
+
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Gửi Zalo sẽ tạo ảnh JPG rồi mở bảng chia sẻ của điện thoại.
+            </p>
           </div>
 
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Nút Gửi Zalo sẽ tạo ảnh JPG rồi mở bảng
-            chia sẻ của điện thoại. Chọn Zalo và chọn
-            đúng hụi viên cần gửi.
-          </p>
+          <div className="border-t pt-4">
+            <p className="mb-2 text-sm font-semibold">
+              Điều chỉnh
+            </p>
+
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                onClick={onEdit}
+                disabled={
+                  working || exporting
+                }
+              >
+                <Pencil className="size-4" />
+                Sửa / điều chỉnh
+              </Button>
+
+              <Button
+                variant="outline"
+                className="text-destructive"
+                onClick={onCancel}
+                disabled={
+                  working || exporting
+                }
+              >
+                <Ban className="size-4" />
+                Hủy phiếu
+              </Button>
+            </div>
+          </div>
         </Card>
       )}
 
@@ -2534,75 +2881,90 @@ function ReceiptPreview({
           </h3>
         </div>
 
-        {receipt.payments.length === 0 ? (
+        {receipt.payments.length ===
+        0 ? (
           <p className="mt-3 text-sm text-muted-foreground">
             Chưa có giao dịch nào.
           </p>
         ) : (
           <div className="mt-3 space-y-2">
-            {receipt.payments.map((payment) => (
-              <div
-                key={payment.id}
-                className={`rounded-md border p-3 text-sm ${
-                  payment.status === "cancelled"
-                    ? "opacity-50"
-                    : ""
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold">
-                      {payment.direction === "collect"
-                        ? "Thu"
-                        : "Chi"}{" "}
-                      {formatVND(
-                        Number(payment.amount),
-                      )}
-                    </p>
-
-                    <p className="text-xs text-muted-foreground">
-                      {paymentMethodLabel(
-                        payment.method,
-                      )}{" "}
-                      ·{" "}
-                      {new Date(
-                        payment.created_at,
-                      ).toLocaleString("vi-VN")}
-                    </p>
-
-                    {payment.note && (
-                      <p className="mt-1 text-xs">
-                        {payment.note}
+            {receipt.payments.map(
+              (payment) => (
+                <div
+                  key={payment.id}
+                  className={`rounded-md border p-3 text-sm ${
+                    payment.status ===
+                    "cancelled"
+                      ? "opacity-50"
+                      : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold">
+                        {payment.direction ===
+                        "collect"
+                          ? "Thu"
+                          : "Chi"}{" "}
+                        {formatVND(
+                          Number(
+                            payment.amount,
+                          ),
+                        )}
                       </p>
-                    )}
+
+                      <p className="text-xs text-muted-foreground">
+                        {paymentMethodLabel(
+                          payment.method,
+                        )}{" "}
+                        ·{" "}
+                        {new Date(
+                          payment.created_at,
+                        ).toLocaleString(
+                          "vi-VN",
+                        )}
+                      </p>
+
+                      {payment.note && (
+                        <p className="mt-1 text-xs">
+                          {payment.note}
+                        </p>
+                      )}
+
+                      {payment.status ===
+                        "cancelled" && (
+                        <p className="mt-1 text-xs text-destructive">
+                          Đã hủy:{" "}
+                          {payment.cancel_reason ||
+                            "Không ghi lý do"}
+                        </p>
+                      )}
+                    </div>
 
                     {payment.status ===
-                      "cancelled" && (
-                      <p className="mt-1 text-xs text-destructive">
-                        Đã hủy:{" "}
-                        {payment.cancel_reason ||
-                          "Không ghi lý do"}
-                      </p>
+                      "active" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0 text-destructive"
+                        onClick={() =>
+                          onCancelPayment(
+                            payment,
+                          )
+                        }
+                        disabled={
+                          working ||
+                          exporting
+                        }
+                      >
+                        <Undo2 className="size-4" />
+                        Hủy
+                      </Button>
                     )}
                   </div>
-
-                  {payment.status === "active" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-destructive"
-                      onClick={() =>
-                        onCancelPayment(payment)
-                      }
-                      disabled={working || exporting}
-                    >
-                      <Undo2 className="size-4" />
-                      Hủy
-                    </Button>
-                  )}
                 </div>
-              </div>
-            ))}
+              ),
+            )}
           </div>
         )}
       </Card>
