@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { HuiPerformanceView } from "@/components/hui-performance-view"
+import { PeriodResultDialog } from "@/components/period-result-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -3050,7 +3051,7 @@ function DayDetail({
       </Tabs>
 
       {editingPeriod && (
-        <PeriodDialog
+        <PeriodResultDialog
           day={day}
           period={editingPeriod}
           membersById={membersById}
