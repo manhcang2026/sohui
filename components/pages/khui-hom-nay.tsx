@@ -92,6 +92,34 @@ type WheelCandidate = {
   member: MemberRow | null
 }
 
+type PageResult<T> = {
+  data: T[] | null
+  error: unknown
+}
+
+const PAGE_SIZE = 1000
+
+async function fetchPagedRows<T>(
+  loadPage: (from: number, to: number) => Promise<PageResult<T>>,
+) {
+  const rows: T[] = []
+  let from = 0
+
+  while (true) {
+    const page = await loadPage(from, from + PAGE_SIZE - 1)
+
+    if (page.error) throw page.error
+
+    const data = page.data ?? []
+    rows.push(...data)
+
+    if (data.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+
+  return rows
+}
+
 function todayInVietnam() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Ho_Chi_Minh",
@@ -226,70 +254,97 @@ export function KhuiHomNayPage() {
 
     const supabase = createClient()
 
-    const [
-      groupsResult,
-      sharesResult,
-      periodsResult,
-      membersResult,
-      paymentsResult,
-    ] = await Promise.all([
-      supabase
-        .from("hui_groups")
-        .select(
-          "id, code, name, contribution_amount, total_shares, fee_amount, minimum_bid_amount, bid_step_amount, opening_time, status",
-        )
-        .eq("status", "active"),
+    try {
+      // Tất cả bảng có thể vượt giới hạn 1.000 dòng của Supabase nên đều
+      // được phân trang. receipt_payments chỉ lấy payment active có liên kết
+      // kỳ hụi vì màn Khui chỉ cần biết kỳ nào đã có tiền xác nhận.
+      const [groupsRows, sharesRows, periodsRows, membersRows, paymentRows] =
+        await Promise.all([
+          fetchPagedRows<GroupRow>(async (from, to) => {
+            const result = await supabase
+              .from("hui_groups")
+              .select(
+                "id, code, name, contribution_amount, total_shares, fee_amount, minimum_bid_amount, bid_step_amount, opening_time, status",
+              )
+              .eq("status", "active")
+              .order("id")
+              .range(from, to)
 
-      supabase
-        .from("hui_shares")
-        .select(
-          "id, group_id, member_id, share_number, status",
-        )
-        .order("share_number"),
+            return {
+              data: (result.data ?? []) as GroupRow[],
+              error: result.error,
+            }
+          }),
+          fetchPagedRows<ShareRow>(async (from, to) => {
+            const result = await supabase
+              .from("hui_shares")
+              .select("id, group_id, member_id, share_number, status")
+              .order("group_id")
+              .order("share_number")
+              .order("id")
+              .range(from, to)
 
-      supabase
-        .from("hui_periods")
-        .select(
-          "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes",
-        )
-        .order("scheduled_date")
-        .order("period_number"),
+            return {
+              data: (result.data ?? []) as ShareRow[],
+              error: result.error,
+            }
+          }),
+          fetchPagedRows<PeriodRow>(async (from, to) => {
+            const result = await supabase
+              .from("hui_periods")
+              .select(
+                "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes",
+              )
+              .order("scheduled_date")
+              .order("period_number")
+              .order("id")
+              .range(from, to)
 
-      supabase
-        .from("members")
-        .select("id, full_name, phone")
-        .order("full_name"),
+            return {
+              data: (result.data ?? []) as PeriodRow[],
+              error: result.error,
+            }
+          }),
+          fetchPagedRows<MemberRow>(async (from, to) => {
+            const result = await supabase
+              .from("members")
+              .select("id, full_name, phone")
+              .order("full_name")
+              .order("id")
+              .range(from, to)
 
-      supabase
-        .from("receipt_payments")
-        .select(
-          "id, source_period_id, direction, amount, status",
-        ),
-    ])
+            return {
+              data: (result.data ?? []) as MemberRow[],
+              error: result.error,
+            }
+          }),
+          fetchPagedRows<PeriodPaymentRow>(async (from, to) => {
+            const result = await supabase
+              .from("receipt_payments")
+              .select("id, source_period_id, direction, amount, status")
+              .eq("status", "active")
+              .not("source_period_id", "is", null)
+              .order("id")
+              .range(from, to)
 
-    const firstError =
-      groupsResult.error ??
-      sharesResult.error ??
-      periodsResult.error ??
-      membersResult.error ??
-      paymentsResult.error
+            return {
+              data: (result.data ?? []) as PeriodPaymentRow[],
+              error: result.error,
+            }
+          }),
+        ])
 
-    if (firstError) {
-      console.error(firstError)
+      setGroups(groupsRows)
+      setShares(sharesRows)
+      setPeriods(periodsRows)
+      setMembers(membersRows)
+      setPeriodPayments(paymentRows)
+    } catch (caught) {
+      console.error(caught)
       setError("Không thể tải dữ liệu khui kỳ.")
+    } finally {
       setLoading(false)
-      return
     }
-
-    setGroups((groupsResult.data ?? []) as GroupRow[])
-    setShares((sharesResult.data ?? []) as ShareRow[])
-    setPeriods((periodsResult.data ?? []) as PeriodRow[])
-    setMembers((membersResult.data ?? []) as MemberRow[])
-    setPeriodPayments(
-      (paymentsResult.data ?? []) as PeriodPaymentRow[],
-    )
-
-    setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -1222,23 +1277,33 @@ function KhuiDialog({
                   Chân hốt
                 </label>
 
-                {!locked && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    disabled={
-                      wheelCandidates.length === 0
-                    }
-                    onClick={() =>
-                      setWheelOpen(true)
-                    }
-                  >
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={
+                    locked ||
+                    wheelCandidates.length === 0
+                  }
+                  onClick={() =>
+                    setWheelOpen(true)
+                  }
+                  title={
+                    locked
+                      ? "Kỳ đã có xác nhận thu/chi nên không thể bốc thăm lại."
+                      : undefined
+                  }
+                >
+                  {locked ? (
+                    <LockKeyhole className="size-4" />
+                  ) : (
                     <Dices className="size-4" />
-                    Bốc thăm
-                  </Button>
-                )}
+                  )}
+                  {locked
+                    ? "Bốc thăm · đã khóa"
+                    : "Bốc thăm"}
+                </Button>
               </div>
 
               <select
@@ -1283,7 +1348,9 @@ function KhuiDialog({
               </select>
 
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Chỉ hiển thị các chân đang hoạt động và chưa từng hốt.
+                {locked
+                  ? "Kỳ đã có xác nhận thu/chi nên kết quả và bốc thăm được khóa."
+                  : "Chỉ hiển thị các chân đang hoạt động và chưa từng hốt."}
               </p>
             </div>
 
