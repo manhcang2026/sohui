@@ -178,6 +178,20 @@ export function buildReceipts({
       }
     }
 
+    const receiptRowsByKey = new Map(
+      receiptRows.map((row) => [
+        `${row.receipt_date}|${row.member_id}`,
+        row,
+      ]),
+    )
+    const paymentsByReceiptId = new Map<string, PaymentRow[]>()
+
+    for (const payment of payments) {
+      const current = paymentsByReceiptId.get(payment.receipt_id) ?? []
+      current.push(payment)
+      paymentsByReceiptId.set(payment.receipt_id, current)
+    }
+
     const result: Receipt[] = []
 
     for (const [key, item] of linesByReceiptKey) {
@@ -191,11 +205,7 @@ export function buildReceipts({
       const totalFee = lines.reduce((n, x) => n + x.feeAmount, 0)
 
       const db =
-        receiptRows.find(
-          (x) =>
-            x.member_id === item.memberId &&
-            x.receipt_date === item.date,
-        ) ?? null
+        receiptRowsByKey.get(`${item.date}|${item.memberId}`) ?? null
 
       const settlementAmount = Number(db?.settlement_amount ?? 0)
       const netAmount = totalPay - totalReceive + settlementAmount
@@ -208,7 +218,7 @@ export function buildReceipts({
             : "balanced"
 
       const allReceiptPayments = db
-        ? payments.filter((x) => x.receipt_id === db.id)
+        ? paymentsByReceiptId.get(db.id) ?? []
         : []
 
       const activePayments = allReceiptPayments.filter(
