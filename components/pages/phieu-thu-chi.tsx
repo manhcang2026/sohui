@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react"
 import {
@@ -1181,6 +1182,7 @@ export function PhieuThuChiPage() {
   const [working, setWorking] = useState(false)
   const [sharingKey, setSharingKey] = useState<string | null>(null)
   const [error, setError] = useState("")
+  const paymentWriteLock = useRef(false)
 
   const effectiveFrom = dateMode === "single" ? singleDate : dateFrom
   const effectiveTo = dateMode === "single" ? singleDate : dateTo
@@ -1663,98 +1665,286 @@ export function PhieuThuChiPage() {
     note: string
     amount?: number
   }) {
-    if (input.receipts.length === 0) return
+    if (input.receipts.length === 0 || paymentWriteLock.current) return
 
+    // Khóa đồng bộ ngay từ lần bấm đầu tiên. setWorking là state nên có thể
+    // chưa kịp render trước cú double-click thứ hai.
+    paymentWriteLock.current = true
     setWorking(true)
     setError("")
 
+    let insertedCount = 0
+
     try {
-      const eligible = input.receipts.filter(
+      const candidates = input.receipts.filter(
         (receipt) =>
           receipt.status !== "cancelled" &&
           receipt.direction !== "balanced" &&
           receipt.remainingAmount > 0,
       )
 
-      if (eligible.length === 0) return
-
-      const dbRows = await Promise.all(eligible.map(ensureReceipt))
-      const dbByKey = new Map(
-        eligible.map((receipt, index) => [receipt.key, dbRows[index]]),
-      )
-
-      const payload = eligible.map((receipt) => {
-        const db = dbByKey.get(receipt.key)
-        if (!db) throw new Error("Không tìm thấy phiếu để ghi giao dịch")
-
-        const amount =
-          eligible.length === 1 && input.amount != null
-            ? input.amount
-            : receipt.remainingAmount
-
-        if (amount <= 0 || amount > receipt.remainingAmount) {
-          throw new Error(
-            `Số tiền của ${receipt.member.full_name} không hợp lệ.`,
-          )
-        }
-
-        return {
-          receipt_id: db.id,
-          direction: receipt.direction,
-          amount,
-          method: input.method,
-          transaction_date: input.transactionDate,
-          note: input.note.trim() || null,
-        }
-      })
+      if (candidates.length === 0) {
+        setPaymentDialog(null)
+        setSelectedKeys([])
+        return
+      }
 
       const supabase = createClient()
-      const { error: insertError } = await supabase
-        .from("receipt_payments")
-        .insert(payload)
+      const now = new Date().toISOString()
 
-      if (insertError) throw insertError
+      // Upsert phiếu theo lô thay vì gọi ensureReceipt hàng trăm lần.
+      // Không ghi đè status/settlement của phiếu đang có.
+      const receiptPayloads = candidates.map((receipt) => ({
+        member_id: receipt.member.id,
+        receipt_date: receipt.receiptDate,
+        source_total_pay: receipt.totalPay,
+        source_total_receive: receipt.totalReceive,
+        source_total_fee: receipt.totalFee,
+        source_total_profit: 0,
+        updated_at: now,
+      }))
 
-      await Promise.all(
-        eligible.map(async (receipt, index) => {
-          const db = dbRows[index]
-          const added = payload[index].amount
-          await updateStoredReceiptStatus(
-            db.id,
-            Math.abs(receipt.netAmount),
-            receipt.paidAmount + added,
+      const freshReceiptRows: ReceiptDbRow[] = []
+      const receiptBatchSize = 100
+
+      for (let i = 0; i < receiptPayloads.length; i += receiptBatchSize) {
+        const chunk = receiptPayloads.slice(i, i + receiptBatchSize)
+        const { data, error: receiptError } = await supabase
+          .from("hui_receipts")
+          .upsert(chunk, { onConflict: "member_id,receipt_date" })
+          .select(
+            "id, member_id, receipt_date, settlement_amount, note, status, cancelled_at, cancel_reason",
           )
-        }),
+
+        if (receiptError) throw receiptError
+        freshReceiptRows.push(...((data ?? []) as ReceiptDbRow[]))
+      }
+
+      const dbByKey = new Map(
+        freshReceiptRows.map((row) => [
+          `${row.receipt_date}|${row.member_id}`,
+          row,
+        ]),
       )
 
-      const auditPayload = eligible.map((receipt, index) => ({
+      const receiptIds = freshReceiptRows.map((row) => row.id)
+      const freshPayments: Array<{
+        receipt_id: string
+        direction: "collect" | "pay"
+        amount: number
+      }> = []
+      const queryBatchSize = 100
+
+      // Đọc lại ledger thật ngay trước lúc insert. Đây là lớp chống việc UI
+      // còn dữ liệu cũ sau một lần bulk vừa chạy xong hoặc một lần retry.
+      for (let i = 0; i < receiptIds.length; i += queryBatchSize) {
+        const ids = receiptIds.slice(i, i + queryBatchSize)
+        const { data, error: paymentReadError } = await supabase
+          .from("receipt_payments")
+          .select("receipt_id, direction, amount")
+          .in("receipt_id", ids)
+          .eq("status", "active")
+
+        if (paymentReadError) throw paymentReadError
+        freshPayments.push(
+          ...((data ?? []) as Array<{
+            receipt_id: string
+            direction: "collect" | "pay"
+            amount: number
+          }>),
+        )
+      }
+
+      const paidByReceiptDirection = new Map<string, number>()
+      for (const payment of freshPayments) {
+        const key = `${payment.receipt_id}|${payment.direction}`
+        paidByReceiptDirection.set(
+          key,
+          (paidByReceiptDirection.get(key) ?? 0) +
+            Number(payment.amount || 0),
+        )
+      }
+
+      const pending: Array<{
+        receipt: Receipt
+        db: ReceiptDbRow
+        amount: number
+        freshPaid: number
+        totalRequired: number
+      }> = []
+      let skippedCount = 0
+
+      for (const receipt of candidates) {
+        const db = dbByKey.get(`${receipt.receiptDate}|${receipt.member.id}`)
+
+        if (!db || db.status === "cancelled") {
+          skippedCount += 1
+          continue
+        }
+
+        const freshPaid =
+          paidByReceiptDirection.get(`${db.id}|${receipt.direction}`) ?? 0
+
+        const totalRequired = Math.abs(receipt.netAmount)
+        const freshRemaining = Math.max(0, totalRequired - freshPaid)
+
+        if (freshRemaining <= 0) {
+          skippedCount += 1
+          continue
+        }
+
+        const requestedAmount =
+          candidates.length === 1 && input.amount != null
+            ? input.amount
+            : freshRemaining
+
+        if (requestedAmount <= 0) {
+          skippedCount += 1
+          continue
+        }
+
+        if (requestedAmount > freshRemaining) {
+          throw new Error(
+            `Phiếu của ${receipt.member.full_name} vừa thay đổi. ` +
+              `Hiện chỉ còn ${formatVND(freshRemaining)}. Hãy mở lại phiếu rồi xác nhận lại.`,
+          )
+        }
+
+        pending.push({
+          receipt,
+          db,
+          amount: requestedAmount,
+          freshPaid,
+          totalRequired,
+        })
+      }
+
+      if (pending.length === 0) {
+        setPaymentDialog(null)
+        setSelectedKeys([])
+        await loadData()
+        window.alert(
+          `Không tạo thêm giao dịch. ${skippedCount} phiếu đã đủ, đã hủy hoặc không còn số tiền cần thanh toán.`,
+        )
+        return
+      }
+
+      const paymentPayload = pending.map((item) => ({
+        receipt_id: item.db.id,
+        direction: item.receipt.direction,
+        amount: item.amount,
+        method: input.method,
+        transaction_date: input.transactionDate,
+        note: input.note.trim() || null,
+      }))
+
+      // Chia nhỏ insert để tránh một request quá lớn. Nếu một batch sau lỗi,
+      // batch đã thành công vẫn được ledger ghi nhận; lần retry sẽ đọc lại và
+      // tự bỏ qua các phiếu đó thay vì tạo trùng.
+      const insertBatchSize = 100
+      for (let i = 0; i < paymentPayload.length; i += insertBatchSize) {
+        const chunk = paymentPayload.slice(i, i + insertBatchSize)
+        const { error: insertError } = await supabase
+          .from("receipt_payments")
+          .insert(chunk)
+
+        if (insertError) throw insertError
+        insertedCount += chunk.length
+      }
+
+      // Tất cả bulk/full sẽ thành paid. Trường hợp một phiếu nhập một phần
+      // có thể là partial hoặc paid nếu số nhập bằng đúng phần còn lại.
+      const paidIds: string[] = []
+      const partialIds: string[] = []
+
+      for (const item of pending) {
+        const afterPaid = item.freshPaid + item.amount
+        if (item.totalRequired > 0 && afterPaid >= item.totalRequired) {
+          paidIds.push(item.db.id)
+        } else {
+          partialIds.push(item.db.id)
+        }
+      }
+
+      const statusBatchSize = 100
+      for (const [status, ids] of [
+        ["paid", paidIds],
+        ["partial", partialIds],
+      ] as const) {
+        for (let i = 0; i < ids.length; i += statusBatchSize) {
+          const chunk = ids.slice(i, i + statusBatchSize)
+          if (chunk.length === 0) continue
+
+          const { error: statusError } = await supabase
+            .from("hui_receipts")
+            .update({ status, updated_at: new Date().toISOString() })
+            .in("id", chunk)
+
+          if (statusError) throw statusError
+        }
+      }
+
+      const auditPayload = pending.map((item) => ({
         entity_type: "receipt",
-        entity_id: dbRows[index].id,
+        entity_id: item.db.id,
         action:
-          receipt.direction === "collect"
+          item.receipt.direction === "collect"
             ? "collect_payment"
             : "pay_payment",
         after_data: {
-          amount: payload[index].amount,
+          amount: item.amount,
           method: input.method,
           transaction_date: input.transactionDate,
           note: input.note.trim() || null,
         },
       }))
 
-      await supabase.from("audit_logs").insert(auditPayload)
+      const auditBatchSize = 100
+      for (let i = 0; i < auditPayload.length; i += auditBatchSize) {
+        const chunk = auditPayload.slice(i, i + auditBatchSize)
+        const { error: auditError } = await supabase
+          .from("audit_logs")
+          .insert(chunk)
+
+        if (auditError) {
+          // Payment đã ghi thành công thì không được coi audit lỗi là lý do để
+          // người dùng phải ghi payment lại. Giữ log console để kiểm tra sau.
+          console.error("Không thể ghi một batch audit_logs:", auditError)
+        }
+      }
 
       setPaymentDialog(null)
       setSelectedKeys([])
       await loadData()
+
+      const actionLabel =
+        pending[0]?.receipt.direction === "pay" ? "chi" : "thu"
+      window.alert(
+        `Đã ghi nhận ${actionLabel} ${pending.length} phiếu.` +
+          (skippedCount > 0
+            ? ` Bỏ qua ${skippedCount} phiếu đã đủ/hủy hoặc không còn số tiền.`
+            : ""),
+      )
     } catch (caught) {
       console.error(caught)
+
+      // Nếu một batch payment đã insert rồi nhưng bước sau gặp lỗi, tải lại
+      // ngay để UI phản ánh ledger thật. Retry sau đó cũng sẽ không tạo trùng.
+      if (insertedCount > 0) {
+        try {
+          await loadData()
+        } catch (reloadError) {
+          console.error(reloadError)
+        }
+      }
+
       setError(
         caught instanceof Error
           ? `Không thể ghi nhận giao dịch: ${caught.message}`
           : "Không thể ghi nhận giao dịch.",
       )
     } finally {
+      paymentWriteLock.current = false
       setWorking(false)
     }
   }
