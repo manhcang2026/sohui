@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   Ban,
   CalendarDays,
+  CalendarRange,
   CheckCheck,
   ChevronRight,
   CircleDollarSign,
@@ -19,6 +20,7 @@ import {
   Pencil,
   Phone,
   RefreshCw,
+  Send,
   Share2,
   Undo2,
   UserRound,
@@ -29,6 +31,7 @@ import {
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 
 type GroupRow = {
@@ -87,17 +90,28 @@ type ReceiptDbRow = {
   cancel_reason: string | null
 }
 
+type StoredPaymentMethod =
+  | "cash"
+  | "transfer"
+  | "legacy_import"
+  | "other"
+
+type EditablePaymentMethod = "cash" | "transfer" | "legacy_import"
+
 type PaymentRow = {
   id: string
   receipt_id: string
   direction: "collect" | "pay"
   amount: number
-  method: "cash" | "transfer" | "other"
+  method: StoredPaymentMethod
   note: string | null
   status: "active" | "cancelled"
   cancelled_at: string | null
   cancel_reason: string | null
+  transaction_date: string
   created_at: string
+  updated_at: string
+  source_period_id: string | null
 }
 
 type ReceiptLine = {
@@ -117,6 +131,8 @@ type ReceiptLine = {
 }
 
 type Receipt = {
+  key: string
+  receiptDate: string
   member: MemberRow
   lines: ReceiptLine[]
   groupCount: number
@@ -136,6 +152,22 @@ type Receipt = {
   direction: "collect" | "pay" | "balanced"
   status: "open" | "partial" | "paid" | "cancelled"
 }
+
+type ListFilter = "all" | "collect" | "pay" | "open" | "done"
+type DateMode = "single" | "range"
+
+type PaymentDialogState =
+  | {
+      mode: "create"
+      receipts: Receipt[]
+      partial: boolean
+    }
+  | {
+      mode: "edit"
+      receipt: Receipt
+      payment: PaymentRow
+    }
+  | null
 
 const EMPTY_SETTINGS: SettingsRow = {
   owner_name: "",
@@ -161,6 +193,11 @@ function formatDate(value: string) {
   return `${d}/${m}/${y}`
 }
 
+function formatDateRange(from: string, to: string) {
+  if (from === to) return formatDate(from)
+  return `${formatDate(from)} – ${formatDate(to)}`
+}
+
 function formatVND(value: number) {
   return new Intl.NumberFormat("vi-VN", {
     style: "currency",
@@ -180,16 +217,31 @@ function receiptStatusLabel(status: Receipt["status"]) {
   return "Chưa thanh toán"
 }
 
-function paymentMethodLabel(method: PaymentRow["method"]) {
+function paymentMethodLabel(method: StoredPaymentMethod) {
   if (method === "cash") return "Tiền mặt"
   if (method === "transfer") return "Chuyển khoản"
-  return "Khác"
+  if (method === "legacy_import") return "Nhập dữ liệu cũ"
+  return "Khác (dữ liệu cũ)"
+}
+
+function normalizeEditableMethod(
+  method: StoredPaymentMethod,
+): EditablePaymentMethod {
+  if (method === "cash") return "cash"
+  if (method === "transfer") return "transfer"
+  return "legacy_import"
 }
 
 function parseAmount(value: string) {
   const clean = value.replace(/\./g, "").replace(/,/g, "").trim()
   const n = Number(clean)
   return Number.isFinite(n) ? n : 0
+}
+
+function formatAmountInput(value: number) {
+  return new Intl.NumberFormat("vi-VN", {
+    maximumFractionDigits: 0,
+  }).format(Math.round(Number(value || 0)))
 }
 
 function removeVietnameseMarks(value: string) {
@@ -419,7 +471,7 @@ async function createReceiptJpeg(
     if (line.huiAmount > 0) moneyRows += 1
     if (line.feeAmount > 0) moneyRows += 1
 
-    moneyRows += 1 // Kết quả dây này luôn có
+    moneyRows += 1
 
     const moneyHeight = moneyRows * 55 + 44
     const statsHeight = 126
@@ -1071,7 +1123,43 @@ async function createReceiptJpeg(
   )
 }
 
+async function shareReceiptJpg(
+  receipt: Receipt,
+  settings: SettingsRow,
+) {
+  const file = await createReceiptJpeg(
+    receipt,
+    receipt.receiptDate,
+    settings,
+  )
+  const shareText = `Phiếu hụi ngày ${formatDate(receipt.receiptDate)}`
+
+  if (
+    navigator.share &&
+    (!navigator.canShare || navigator.canShare({ files: [file] }))
+  ) {
+    try {
+      await navigator.share({
+        title: shareText,
+        text: shareText,
+        files: [file],
+      })
+      return
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return
+      console.error(e)
+    }
+  }
+
+  downloadFile(file)
+  window.alert(
+    "Thiết bị này chưa hỗ trợ chia sẻ ảnh trực tiếp. Phiếu JPG đã được lưu xuống máy. Bạn mở Zalo và chọn ảnh vừa lưu để gửi.",
+  )
+}
+
 export function PhieuThuChiPage() {
+  const today = todayInVietnam()
+
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [shares, setShares] = useState<ShareRow[]>([])
   const [periods, setPeriods] = useState<PeriodRow[]>([])
@@ -1080,11 +1168,22 @@ export function PhieuThuChiPage() {
   const [receiptRows, setReceiptRows] = useState<ReceiptDbRow[]>([])
   const [payments, setPayments] = useState<PaymentRow[]>([])
 
-  const [selectedDate, setSelectedDate] = useState(todayInVietnam())
-  const [previewMemberId, setPreviewMemberId] = useState<string | null>(null)
+  const [dateMode, setDateMode] = useState<DateMode>("single")
+  const [singleDate, setSingleDate] = useState(today)
+  const [dateFrom, setDateFrom] = useState(today)
+  const [dateTo, setDateTo] = useState(today)
+  const [filter, setFilter] = useState<ListFilter>("all")
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const [paymentDialog, setPaymentDialog] =
+    useState<PaymentDialogState>(null)
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
+  const [sharingKey, setSharingKey] = useState<string | null>(null)
   const [error, setError] = useState("")
+
+  const effectiveFrom = dateMode === "single" ? singleDate : dateFrom
+  const effectiveTo = dateMode === "single" ? singleDate : dateTo
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -1126,8 +1225,9 @@ export function PhieuThuChiPage() {
       supabase
         .from("receipt_payments")
         .select(
-          "id, receipt_id, direction, amount, method, note, status, cancelled_at, cancel_reason, created_at",
+          "id, receipt_id, direction, amount, method, note, status, cancelled_at, cancel_reason, transaction_date, created_at, updated_at, source_period_id",
         )
+        .order("transaction_date", { ascending: false })
         .order("created_at", { ascending: false }),
     ])
 
@@ -1143,7 +1243,7 @@ export function PhieuThuChiPage() {
     if (firstError) {
       console.error(firstError)
       setError(
-        "Không thể tải dữ liệu phiếu. Nếu vừa cập nhật, hãy chạy file SQL trước.",
+        "Không thể tải dữ liệu phiếu. Hãy chạy SQL cập nhật receipt_payments trước rồi thử lại.",
       )
       setLoading(false)
       return
@@ -1164,6 +1264,10 @@ export function PhieuThuChiPage() {
   }, [loadData])
 
   const receipts = useMemo(() => {
+    if (!effectiveFrom || !effectiveTo || effectiveFrom > effectiveTo) {
+      return []
+    }
+
     const groupsById = new Map(groups.map((x) => [x.id, x]))
     const membersById = new Map(members.map((x) => [x.id, x]))
     const sharesByGroup = new Map<string, ShareRow[]>()
@@ -1181,13 +1285,17 @@ export function PhieuThuChiPage() {
       periodsByGroup.set(x.group_id, arr)
     }
 
-    const linesByMember = new Map<string, ReceiptLine[]>()
+    const linesByReceiptKey = new Map<
+      string,
+      { memberId: string; date: string; lines: ReceiptLine[] }
+    >()
 
     for (
       const period of periods.filter(
         (x) =>
           isCompleted(x.status) &&
-          x.scheduled_date === selectedDate,
+          x.scheduled_date >= effectiveFrom &&
+          x.scheduled_date <= effectiveTo,
       )
     ) {
       const group = groupsById.get(period.group_id)
@@ -1256,7 +1364,6 @@ export function PhieuThuChiPage() {
 
         for (const share of memberShares) {
           if (share.id === period.winner_share_id) {
-            // Chân vừa hốt vẫn là chân sống trong chính kỳ này.
             liveShares += 1
             continue
           }
@@ -1292,18 +1399,24 @@ export function PhieuThuChiPage() {
             memberId === winnerMemberId ? fee : 0,
         }
 
-        const arr = linesByMember.get(memberId) ?? []
-        arr.push(line)
-        linesByMember.set(memberId, arr)
+        const key = `${period.scheduled_date}|${memberId}`
+        const current = linesByReceiptKey.get(key) ?? {
+          memberId,
+          date: period.scheduled_date,
+          lines: [],
+        }
+        current.lines.push(line)
+        linesByReceiptKey.set(key, current)
       }
     }
 
     const result: Receipt[] = []
 
-    for (const [memberId, lines] of linesByMember) {
-      const member = membersById.get(memberId)
+    for (const [key, item] of linesByReceiptKey) {
+      const member = membersById.get(item.memberId)
       if (!member) continue
 
+      const lines = item.lines
       const totalPay = lines.reduce((n, x) => n + x.payAmount, 0)
       const totalHuiAmount = lines.reduce((n, x) => n + x.huiAmount, 0)
       const totalReceive = lines.reduce((n, x) => n + x.receiveAmount, 0)
@@ -1312,8 +1425,8 @@ export function PhieuThuChiPage() {
       const db =
         receiptRows.find(
           (x) =>
-            x.member_id === memberId &&
-            x.receipt_date === selectedDate,
+            x.member_id === item.memberId &&
+            x.receipt_date === item.date,
         ) ?? null
 
       const settlementAmount = Number(db?.settlement_amount ?? 0)
@@ -1359,6 +1472,8 @@ export function PhieuThuChiPage() {
       }
 
       result.push({
+        key,
+        receiptDate: item.date,
         member,
         lines,
         groupCount: new Set(lines.map((x) => x.groupId)).size,
@@ -1383,27 +1498,113 @@ export function PhieuThuChiPage() {
       })
     }
 
-    return result.sort((a, b) =>
-      a.member.full_name.localeCompare(b.member.full_name, "vi"),
-    )
+    return result.sort((a, b) => {
+      const dateCompare = b.receiptDate.localeCompare(a.receiptDate)
+      if (dateCompare !== 0) return dateCompare
+      return a.member.full_name.localeCompare(b.member.full_name, "vi")
+    })
   }, [
+    effectiveFrom,
+    effectiveTo,
     groups,
     members,
     payments,
     periods,
     receiptRows,
-    selectedDate,
     shares,
   ])
 
-  const preview = receipts.find(
-    (x) => x.member.id === previewMemberId,
+  const filteredReceipts = useMemo(() => {
+    return receipts.filter((receipt) => {
+      if (filter === "all") return true
+      if (filter === "collect") return receipt.direction === "collect"
+      if (filter === "pay") return receipt.direction === "pay"
+      if (filter === "done") {
+        return receipt.status === "paid" || receipt.direction === "balanced"
+      }
+      return (
+        receipt.status !== "paid" &&
+        receipt.status !== "cancelled" &&
+        receipt.direction !== "balanced"
+      )
+    })
+  }, [filter, receipts])
+
+  const stats = useMemo(() => {
+    const active = receipts.filter((r) => r.status !== "cancelled")
+    const collect = active.filter(
+      (r) => r.direction === "collect" && r.remainingAmount > 0,
+    )
+    const pay = active.filter(
+      (r) => r.direction === "pay" && r.remainingAmount > 0,
+    )
+    const done = active.filter(
+      (r) => r.remainingAmount <= 0,
+    )
+
+    return {
+      total: active.length,
+      collectCount: collect.length,
+      collectAmount: collect.reduce((n, r) => n + r.remainingAmount, 0),
+      payCount: pay.length,
+      payAmount: pay.reduce((n, r) => n + r.remainingAmount, 0),
+      doneCount: done.length,
+    }
+  }, [receipts])
+
+  const preview = receipts.find((x) => x.key === previewKey) ?? null
+
+  const selectedReceipts = useMemo(
+    () => receipts.filter((r) => selectedKeys.includes(r.key)),
+    [receipts, selectedKeys],
   )
+
+  const selectedCollect = selectedReceipts.filter(
+    (r) =>
+      r.status !== "cancelled" &&
+      r.direction === "collect" &&
+      r.remainingAmount > 0,
+  )
+  const selectedPay = selectedReceipts.filter(
+    (r) =>
+      r.status !== "cancelled" &&
+      r.direction === "pay" &&
+      r.remainingAmount > 0,
+  )
+
+  const allVisibleChecked =
+    filteredReceipts.length > 0 &&
+    filteredReceipts.every((r) => selectedKeys.includes(r.key))
+
+  function toggleSelected(key: string) {
+    setSelectedKeys((current) =>
+      current.includes(key)
+        ? current.filter((x) => x !== key)
+        : [...current, key],
+    )
+  }
+
+  function toggleAllVisible() {
+    if (allVisibleChecked) {
+      const visible = new Set(filteredReceipts.map((r) => r.key))
+      setSelectedKeys((current) => current.filter((x) => !visible.has(x)))
+      return
+    }
+
+    setSelectedKeys((current) => [
+      ...new Set([...current, ...filteredReceipts.map((r) => r.key)]),
+    ])
+  }
+
+  function resetListContext() {
+    setSelectedKeys([])
+    setPreviewKey(null)
+  }
 
   async function ensureReceipt(receipt: Receipt) {
     const payload = {
       member_id: receipt.member.id,
-      receipt_date: selectedDate,
+      receipt_date: receipt.receiptDate,
       source_total_pay: receipt.totalPay,
       source_total_receive: receipt.totalReceive,
       source_total_fee: receipt.totalFee,
@@ -1422,119 +1623,277 @@ export function PhieuThuChiPage() {
             onConflict: "member_id,receipt_date",
           })
 
-    const { data, error } = await q
+    const { data, error: receiptError } = await q
       .select(
         "id, member_id, receipt_date, settlement_amount, note, status, cancelled_at, cancel_reason",
       )
       .single()
 
-    if (error) throw error
+    if (receiptError) throw receiptError
     return data as ReceiptDbRow
   }
 
-  async function addPayment(receipt: Receipt, amount: number) {
-    if (
-      receipt.direction === "balanced" ||
-      amount <= 0 ||
-      amount > receipt.remainingAmount
-    ) {
-      return
-    }
+  async function updateStoredReceiptStatus(
+    receiptId: string,
+    totalRequired: number,
+    activePaid: number,
+  ) {
+    const nextStatus =
+      totalRequired > 0 && activePaid >= totalRequired
+        ? "paid"
+        : activePaid > 0
+          ? "partial"
+          : "open"
 
-    const methodAnswer = window.prompt(
-      "Hình thức: 1 = Chuyển khoản, 2 = Tiền mặt, 3 = Khác",
-      "1",
-    )
-    if (methodAnswer === null) return
+    const { error: statusError } = await createClient()
+      .from("hui_receipts")
+      .update({
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", receiptId)
 
-    const method =
-      methodAnswer === "2"
-        ? "cash"
-        : methodAnswer === "3"
-          ? "other"
-          : "transfer"
+    if (statusError) throw statusError
+  }
 
-    const note =
-      window.prompt(
-        "Ghi chú giao dịch (có thể bỏ trống):",
-        "",
-      ) ?? ""
+  async function createPayments(input: {
+    receipts: Receipt[]
+    transactionDate: string
+    method: "cash" | "transfer"
+    note: string
+    amount?: number
+  }) {
+    if (input.receipts.length === 0) return
 
     setWorking(true)
     setError("")
 
     try {
-      const db = await ensureReceipt(receipt)
-      const supabase = createClient()
+      const eligible = input.receipts.filter(
+        (receipt) =>
+          receipt.status !== "cancelled" &&
+          receipt.direction !== "balanced" &&
+          receipt.remainingAmount > 0,
+      )
 
-      const { error } = await supabase
-        .from("receipt_payments")
-        .insert({
+      if (eligible.length === 0) return
+
+      const dbRows = await Promise.all(eligible.map(ensureReceipt))
+      const dbByKey = new Map(
+        eligible.map((receipt, index) => [receipt.key, dbRows[index]]),
+      )
+
+      const payload = eligible.map((receipt) => {
+        const db = dbByKey.get(receipt.key)
+        if (!db) throw new Error("Không tìm thấy phiếu để ghi giao dịch")
+
+        const amount =
+          eligible.length === 1 && input.amount != null
+            ? input.amount
+            : receipt.remainingAmount
+
+        if (amount <= 0 || amount > receipt.remainingAmount) {
+          throw new Error(
+            `Số tiền của ${receipt.member.full_name} không hợp lệ.`,
+          )
+        }
+
+        return {
           receipt_id: db.id,
           direction: receipt.direction,
           amount,
-          method,
-          note: note.trim() || null,
-        })
+          method: input.method,
+          transaction_date: input.transactionDate,
+          note: input.note.trim() || null,
+        }
+      })
 
-      if (error) throw error
+      const supabase = createClient()
+      const { error: insertError } = await supabase
+        .from("receipt_payments")
+        .insert(payload)
 
-      const newStatus =
-        receipt.paidAmount + amount >= Math.abs(receipt.netAmount)
-          ? "paid"
-          : "partial"
+      if (insertError) throw insertError
 
-      await supabase
-        .from("hui_receipts")
-        .update({
-          status: newStatus,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", db.id)
+      await Promise.all(
+        eligible.map(async (receipt, index) => {
+          const db = dbRows[index]
+          const added = payload[index].amount
+          await updateStoredReceiptStatus(
+            db.id,
+            Math.abs(receipt.netAmount),
+            receipt.paidAmount + added,
+          )
+        }),
+      )
 
-      await supabase.from("audit_logs").insert({
+      const auditPayload = eligible.map((receipt, index) => ({
         entity_type: "receipt",
-        entity_id: db.id,
+        entity_id: dbRows[index].id,
         action:
           receipt.direction === "collect"
             ? "collect_payment"
             : "pay_payment",
         after_data: {
-          amount,
-          method,
-          note: note.trim() || null,
+          amount: payload[index].amount,
+          method: input.method,
+          transaction_date: input.transactionDate,
+          note: input.note.trim() || null,
         },
-      })
+      }))
 
+      await supabase.from("audit_logs").insert(auditPayload)
+
+      setPaymentDialog(null)
+      setSelectedKeys([])
       await loadData()
-    } catch (e) {
-      console.error(e)
-      setError("Không thể ghi nhận giao dịch.")
+    } catch (caught) {
+      console.error(caught)
+      setError(
+        caught instanceof Error
+          ? `Không thể ghi nhận giao dịch: ${caught.message}`
+          : "Không thể ghi nhận giao dịch.",
+      )
     } finally {
       setWorking(false)
     }
   }
 
-  async function handlePartial(receipt: Receipt) {
-    const answer = window.prompt(
-      `${
-        receipt.direction === "collect"
-          ? "Số tiền vừa thu"
-          : "Số tiền vừa chi"
-      } (còn ${formatVND(receipt.remainingAmount)}):`,
-      String(receipt.remainingAmount),
+  async function editPayment(
+    receipt: Receipt,
+    payment: PaymentRow,
+    input: {
+      amount: number
+      transactionDate: string
+      method: EditablePaymentMethod
+      note: string
+    },
+  ) {
+    if (payment.status !== "active") return
+
+    const otherActivePaid = Math.max(
+      0,
+      receipt.paidAmount - Number(payment.amount),
+    )
+    const maxAmount = Math.max(
+      0,
+      Math.abs(receipt.netAmount) - otherActivePaid,
     )
 
-    if (answer === null) return
-
-    const amount = parseAmount(answer)
-
-    if (amount <= 0 || amount > receipt.remainingAmount) {
-      window.alert("Số tiền không hợp lệ hoặc lớn hơn số còn lại.")
+    if (input.amount <= 0 || input.amount > maxAmount) {
+      window.alert(
+        `Số tiền phải lớn hơn 0 và không vượt quá ${formatVND(maxAmount)}.`,
+      )
       return
     }
 
-    await addPayment(receipt, amount)
+    setWorking(true)
+    setError("")
+
+    try {
+      const supabase = createClient()
+      const before = {
+        amount: Number(payment.amount),
+        method: payment.method,
+        transaction_date: payment.transaction_date,
+        note: payment.note,
+      }
+      const after = {
+        amount: input.amount,
+        method: input.method,
+        transaction_date: input.transactionDate,
+        note: input.note.trim() || null,
+      }
+
+      const { error: updateError } = await supabase
+        .from("receipt_payments")
+        .update({
+          ...after,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", payment.id)
+
+      if (updateError) throw updateError
+
+      if (receipt.db) {
+        await updateStoredReceiptStatus(
+          receipt.db.id,
+          Math.abs(receipt.netAmount),
+          otherActivePaid + input.amount,
+        )
+      }
+
+      await supabase.from("audit_logs").insert({
+        entity_type: "payment",
+        entity_id: payment.id,
+        action: "edit",
+        before_data: before,
+        after_data: after,
+        reason:
+          payment.method === "legacy_import" || payment.method === "other"
+            ? "Đối chiếu / chỉnh dữ liệu cũ"
+            : "Chỉnh giao dịch thu chi",
+      })
+
+      setPaymentDialog(null)
+      await loadData()
+    } catch (caught) {
+      console.error(caught)
+      setError("Không thể sửa giao dịch.")
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function cancelPayment(
+    receipt: Receipt,
+    payment: PaymentRow,
+  ) {
+    const reason = window.prompt("Lý do hủy giao dịch này:")
+    if (!reason?.trim()) return
+
+    setWorking(true)
+    setError("")
+
+    try {
+      const supabase = createClient()
+
+      const { error: cancelError } = await supabase
+        .from("receipt_payments")
+        .update({
+          status: "cancelled",
+          cancelled_at: new Date().toISOString(),
+          cancel_reason: reason.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", payment.id)
+
+      if (cancelError) throw cancelError
+
+      if (receipt.db) {
+        await updateStoredReceiptStatus(
+          receipt.db.id,
+          Math.abs(receipt.netAmount),
+          Math.max(0, receipt.paidAmount - Number(payment.amount)),
+        )
+      }
+
+      await supabase.from("audit_logs").insert({
+        entity_type: "payment",
+        entity_id: payment.id,
+        action: "cancel",
+        before_data: payment,
+        after_data: { ...payment, status: "cancelled" },
+        reason: reason.trim(),
+      })
+
+      await loadData()
+    } catch (caught) {
+      console.error(caught)
+      setError("Không thể hủy giao dịch.")
+    } finally {
+      setWorking(false)
+    }
   }
 
   async function editReceipt(receipt: Receipt) {
@@ -1584,7 +1943,7 @@ export function PhieuThuChiPage() {
         note: note.trim() || null,
       }
 
-      const { error } = await supabase
+      const { error: receiptUpdateError } = await supabase
         .from("hui_receipts")
         .update({
           ...after,
@@ -1593,7 +1952,7 @@ export function PhieuThuChiPage() {
         })
         .eq("id", db.id)
 
-      if (error) throw error
+      if (receiptUpdateError) throw receiptUpdateError
 
       await supabase.from("audit_logs").insert({
         entity_type: "receipt",
@@ -1605,8 +1964,8 @@ export function PhieuThuChiPage() {
       })
 
       await loadData()
-    } catch (e) {
-      console.error(e)
+    } catch (caught) {
+      console.error(caught)
       setError("Không thể sửa phiếu.")
     } finally {
       setWorking(false)
@@ -1633,7 +1992,7 @@ export function PhieuThuChiPage() {
       const db = await ensureReceipt(receipt)
       const supabase = createClient()
 
-      const { error } = await supabase
+      const { error: receiptCancelError } = await supabase
         .from("hui_receipts")
         .update({
           status: "cancelled",
@@ -1643,7 +2002,7 @@ export function PhieuThuChiPage() {
         })
         .eq("id", db.id)
 
-      if (error) throw error
+      if (receiptCancelError) throw receiptCancelError
 
       await supabase.from("audit_logs").insert({
         entity_type: "receipt",
@@ -1655,64 +2014,27 @@ export function PhieuThuChiPage() {
       })
 
       await loadData()
-    } catch (e) {
-      console.error(e)
+    } catch (caught) {
+      console.error(caught)
       setError("Không thể hủy phiếu.")
     } finally {
       setWorking(false)
     }
   }
 
-  async function cancelPayment(
-    receipt: Receipt,
-    payment: PaymentRow,
-  ) {
-    const reason = window.prompt("Lý do hủy giao dịch này:")
-    if (!reason?.trim()) return
-
-    setWorking(true)
-    setError("")
+  async function handleShareFromList(receipt: Receipt) {
+    if (sharingKey || working) return
+    setSharingKey(receipt.key)
 
     try {
-      const supabase = createClient()
-
-      const { error } = await supabase
-        .from("receipt_payments")
-        .update({
-          status: "cancelled",
-          cancelled_at: new Date().toISOString(),
-          cancel_reason: reason.trim(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", payment.id)
-
-      if (error) throw error
-
-      if (receipt.db) {
-        await supabase
-          .from("hui_receipts")
-          .update({
-            status: "open",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", receipt.db.id)
-      }
-
-      await supabase.from("audit_logs").insert({
-        entity_type: "payment",
-        entity_id: payment.id,
-        action: "cancel",
-        before_data: payment,
-        after_data: { ...payment, status: "cancelled" },
-        reason: reason.trim(),
-      })
-
-      await loadData()
-    } catch (e) {
-      console.error(e)
-      setError("Không thể hủy giao dịch.")
+      await shareReceiptJpg(receipt, settings)
+    } catch (caught) {
+      console.error(caught)
+      window.alert(
+        "Không thể tạo ảnh phiếu để gửi Zalo. Vui lòng thử lại.",
+      )
     } finally {
-      setWorking(false)
+      setSharingKey(null)
     }
   }
 
@@ -1741,30 +2063,65 @@ export function PhieuThuChiPage() {
 
   if (preview) {
     return (
-      <ReceiptPreview
-        receipt={preview}
-        date={selectedDate}
-        settings={settings}
-        working={working}
-        onBack={() => setPreviewMemberId(null)}
-        onFull={() => void addPayment(preview, preview.remainingAmount)}
-        onPartial={() => void handlePartial(preview)}
-        onEdit={() => void editReceipt(preview)}
-        onCancel={() => void cancelReceipt(preview)}
-        onCancelPayment={(payment) =>
-          void cancelPayment(preview, payment)
-        }
-      />
+      <>
+        <ReceiptPreview
+          receipt={preview}
+          settings={settings}
+          working={working}
+          onBack={() => setPreviewKey(null)}
+          onFull={() =>
+            setPaymentDialog({
+              mode: "create",
+              receipts: [preview],
+              partial: false,
+            })
+          }
+          onPartial={() =>
+            setPaymentDialog({
+              mode: "create",
+              receipts: [preview],
+              partial: true,
+            })
+          }
+          onEdit={() => void editReceipt(preview)}
+          onCancel={() => void cancelReceipt(preview)}
+          onEditPayment={(payment) =>
+            setPaymentDialog({
+              mode: "edit",
+              receipt: preview,
+              payment,
+            })
+          }
+          onCancelPayment={(payment) =>
+            void cancelPayment(preview, payment)
+          }
+        />
+
+        <PaymentDialog
+          state={paymentDialog}
+          working={working}
+          onClose={() => setPaymentDialog(null)}
+          onCreate={(input) => void createPayments(input)}
+          onEdit={(receipt, payment, input) =>
+            void editPayment(receipt, payment, input)
+          }
+        />
+      </>
     )
   }
 
+  const invalidRange = effectiveFrom > effectiveTo
+  const rangeLabel = invalidRange
+    ? "Khoảng ngày chưa hợp lệ"
+    : formatDateRange(effectiveFrom, effectiveTo)
+
   return (
-    <div className="mx-auto max-w-4xl space-y-4 p-4 md:p-6">
+    <div className="mx-auto max-w-[1400px] space-y-4 p-4 md:p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold">Phiếu</h1>
+          <h1 className="text-xl font-bold">Phiếu hụi</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Thu và chi hụi được tổng hợp tự động từ các kỳ đã chốt.
+            Theo dõi phiếu, thu/chi thực tế và gửi ảnh qua Zalo.
           </p>
         </div>
 
@@ -1772,159 +2129,774 @@ export function PhieuThuChiPage() {
           variant="outline"
           size="sm"
           onClick={() => void loadData()}
+          disabled={working}
         >
           <RefreshCw className="size-4" />
           <span className="hidden sm:inline">Làm mới</span>
         </Button>
       </div>
 
-      <Card className="p-4">
-        <label className="flex max-w-[260px] flex-col gap-1.5 text-sm font-medium">
-          Ngày phiếu
-          <Input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => {
-              setSelectedDate(e.target.value)
-              setPreviewMemberId(null)
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard
+          label="Tổng phiếu"
+          value={`${stats.total}`}
+          hint={rangeLabel}
+        />
+        <SummaryCard
+          label="Còn phải thu"
+          value={formatVND(stats.collectAmount)}
+          hint={`${stats.collectCount} phiếu chưa thu đủ`}
+          tone="collect"
+        />
+        <SummaryCard
+          label="Còn phải chi"
+          value={formatVND(stats.payAmount)}
+          hint={`${stats.payCount} phiếu chưa chi đủ`}
+          tone="pay"
+        />
+        <SummaryCard
+          label="Đã xong"
+          value={`${stats.doneCount}`}
+          hint="phiếu đã thanh toán đủ"
+          tone="done"
+        />
+      </div>
+
+      <Card className="space-y-4 p-4">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant={dateMode === "single" ? "default" : "outline"}
+            onClick={() => {
+              setDateMode("single")
+              resetListContext()
             }}
-          />
-        </label>
+          >
+            <CalendarDays className="size-4" />
+            Một ngày
+          </Button>
+          <Button
+            size="sm"
+            variant={dateMode === "range" ? "default" : "outline"}
+            onClick={() => {
+              setDateMode("range")
+              setDateFrom(singleDate)
+              setDateTo(singleDate)
+              resetListContext()
+            }}
+          >
+            <CalendarRange className="size-4" />
+            Khoảng thời gian
+          </Button>
+        </div>
+
+        {dateMode === "single" ? (
+          <label className="flex max-w-[260px] flex-col gap-1.5 text-sm font-medium">
+            Ngày phiếu
+            <Input
+              type="date"
+              value={singleDate}
+              onChange={(e) => {
+                setSingleDate(e.target.value)
+                resetListContext()
+              }}
+            />
+          </label>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:max-w-[560px]">
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Từ ngày
+              <Input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => {
+                  setDateFrom(e.target.value)
+                  resetListContext()
+                }}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Đến ngày
+              <Input
+                type="date"
+                value={dateTo}
+                onChange={(e) => {
+                  setDateTo(e.target.value)
+                  resetListContext()
+                }}
+              />
+            </label>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2 border-t pt-4">
+          {(
+            [
+              ["all", "Tất cả"],
+              ["collect", "Phải thu"],
+              ["pay", "Phải chi"],
+              ["open", "Chưa xong"],
+              ["done", "Đã xong"],
+            ] as Array<[ListFilter, string]>
+          ).map(([key, label]) => (
+            <Button
+              key={key}
+              size="sm"
+              variant={filter === key ? "default" : "outline"}
+              onClick={() => {
+                setFilter(key)
+                setSelectedKeys([])
+              }}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
       </Card>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-
-      <div>
-        <p className="font-semibold">
-          Phiếu ngày {formatDate(selectedDate)}
+      {invalidRange && (
+        <p className="text-sm text-destructive">
+          Từ ngày phải nhỏ hơn hoặc bằng đến ngày.
         </p>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {receipts.length} hụi viên có phát sinh
-        </p>
-      </div>
+      )}
 
-      {receipts.length === 0 ? (
+      {!invalidRange && filteredReceipts.length > 0 && (
+        <div className="flex items-center gap-3 px-1">
+          <Checkbox
+            checked={allVisibleChecked}
+            onCheckedChange={toggleAllVisible}
+            className="size-5"
+          />
+          <button
+            type="button"
+            className="text-sm font-semibold"
+            onClick={toggleAllVisible}
+          >
+            Chọn tất cả ({filteredReceipts.length})
+          </button>
+        </div>
+      )}
+
+      {!invalidRange && filteredReceipts.length === 0 ? (
         <Card className="flex flex-col items-center gap-3 p-10 text-center">
           <CalendarDays className="size-8 text-muted-foreground" />
           <div>
-            <p className="font-medium">Chưa có phiếu trong ngày này</p>
+            <p className="font-medium">Chưa có phiếu phù hợp</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Hãy chốt kết quả kỳ hụi trước.
+              Hãy đổi ngày/bộ lọc hoặc chốt kết quả kỳ hụi trước.
             </p>
           </div>
         </Card>
-      ) : (
-        <div className="space-y-2.5">
-          {receipts.map((receipt) => {
-            const isCancelled = receipt.status === "cancelled"
-            const isFinished =
-              !isCancelled && receipt.remainingAmount <= 0
+      ) : null}
 
-            const amountLabel = isCancelled
-              ? "Đã hủy"
-              : isFinished
-                ? "Đã thanh toán"
-                : receipt.direction === "collect"
-                  ? "Cần thu"
-                  : receipt.direction === "pay"
-                    ? "Cần chi"
-                    : "Cân bằng"
+      {!invalidRange && filteredReceipts.length > 0 && (
+        <>
+          <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
+            <div className="max-h-[62vh] overflow-auto">
+              <table className="w-full min-w-[950px] text-sm">
+                <thead className="sticky top-0 z-10 bg-muted text-left">
+                  <tr>
+                    <th className="w-12 px-3 py-3" />
+                    {dateMode === "range" && (
+                      <th className="px-3 py-3 font-bold">Ngày phiếu</th>
+                    )}
+                    <th className="px-3 py-3 font-bold">Hụi viên</th>
+                    <th className="px-3 py-3 font-bold">Chiều phiếu</th>
+                    <th className="px-3 py-3 text-right font-bold">Số cuối</th>
+                    <th className="px-3 py-3 font-bold">Thanh toán</th>
+                    <th className="px-3 py-3 font-bold">Gửi Zalo</th>
+                    <th className="px-3 py-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredReceipts.map((receipt) => (
+                    <ReceiptTableRow
+                      key={receipt.key}
+                      receipt={receipt}
+                      showDate={dateMode === "range"}
+                      checked={selectedKeys.includes(receipt.key)}
+                      sharing={sharingKey === receipt.key}
+                      onToggle={() => toggleSelected(receipt.key)}
+                      onView={() => setPreviewKey(receipt.key)}
+                      onShare={() => void handleShareFromList(receipt)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-            const amountText = isCancelled
-              ? "—"
-              : receipt.direction === "collect" &&
-                  receipt.remainingAmount > 0
-                ? `+${formatVND(receipt.remainingAmount)}`
-                : receipt.direction === "pay" &&
-                    receipt.remainingAmount > 0
-                  ? `−${formatVND(receipt.remainingAmount)}`
-                  : formatVND(receipt.remainingAmount)
+          <div className="space-y-3 md:hidden">
+            {filteredReceipts.map((receipt) => (
+              <ReceiptMobileCard
+                key={receipt.key}
+                receipt={receipt}
+                showDate={dateMode === "range"}
+                checked={selectedKeys.includes(receipt.key)}
+                sharing={sharingKey === receipt.key}
+                onToggle={() => toggleSelected(receipt.key)}
+                onView={() => setPreviewKey(receipt.key)}
+                onShare={() => void handleShareFromList(receipt)}
+              />
+            ))}
+          </div>
+        </>
+      )}
 
-            const amountClass =
-              isCancelled || isFinished
-                ? "text-muted-foreground"
-                : receipt.direction === "collect"
-                  ? "text-emerald-700"
-                  : receipt.direction === "pay"
-                    ? "text-red-600"
-                    : "text-muted-foreground"
+      {selectedKeys.length > 0 && (
+        <div className="sticky bottom-3 z-30 rounded-xl border bg-card p-3 shadow-lg">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="font-semibold">
+                Đã chọn {selectedKeys.length} phiếu
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Thu: {selectedCollect.length} · Chi: {selectedPay.length}. Phiếu đã xong/hủy sẽ được bỏ qua.
+              </p>
+            </div>
 
-            const statusClass =
-              receipt.status === "paid"
-                ? "bg-emerald-100 text-emerald-700"
-                : receipt.status === "partial"
-                  ? "bg-amber-100 text-amber-800"
-                  : receipt.status === "cancelled"
-                    ? "bg-muted text-muted-foreground"
-                    : "bg-amber-100 text-amber-800"
-
-            return (
-              <Card
-                key={receipt.member.id}
-                className={`cursor-pointer p-4 transition-shadow hover:shadow-md ${
-                  isCancelled ? "opacity-60" : ""
-                }`}
-                onClick={() => setPreviewMemberId(receipt.member.id)}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={working || selectedCollect.length === 0}
+                onClick={() =>
+                  setPaymentDialog({
+                    mode: "create",
+                    receipts: selectedCollect,
+                    partial: false,
+                  })
+                }
               >
-                <div className="flex items-start gap-3">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
-                    <UserRound className="size-4" />
-                  </div>
+                <CheckCheck className="size-4" />
+                Ghi nhận đã thu ({selectedCollect.length})
+              </Button>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">
-                          {receipt.member.full_name}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {receipt.groupCount} dây · {receipt.totalShares} chân
-                        </p>
-                      </div>
-                      <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
-                    </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={working || selectedPay.length === 0}
+                onClick={() =>
+                  setPaymentDialog({
+                    mode: "create",
+                    receipts: selectedPay,
+                    partial: false,
+                  })
+                }
+              >
+                <WalletCards className="size-4" />
+                Ghi nhận đã chi ({selectedPay.length})
+              </Button>
 
-                    <div className="mt-3 flex items-end justify-between gap-4 border-t pt-3">
-                      <div className="min-w-0">
-                        <span
-                          className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${statusClass}`}
-                        >
-                          {receiptStatusLabel(receipt.status)}
-                        </span>
-
-                        {receipt.status === "partial" && (
-                          <p className="mt-1.5 text-xs text-muted-foreground">
-                            Đã {receipt.direction === "collect" ? "thu" : "chi"}{" "}
-                            {formatVND(receipt.paidAmount)}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="shrink-0 text-right">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          {amountLabel}
-                        </p>
-                        <p
-                          className={`mt-0.5 text-xl font-bold tabular-nums ${amountClass}`}
-                        >
-                          {amountText}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            )
-          })}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setSelectedKeys([])}
+                disabled={working}
+              >
+                Bỏ chọn
+              </Button>
+            </div>
+          </div>
         </div>
       )}
+
+      <PaymentDialog
+        state={paymentDialog}
+        working={working}
+        onClose={() => setPaymentDialog(null)}
+        onCreate={(input) => void createPayments(input)}
+        onEdit={(receipt, payment, input) =>
+          void editPayment(receipt, payment, input)
+        }
+      />
+    </div>
+  )
+}
+
+function SummaryCard({
+  label,
+  value,
+  hint,
+  tone = "default",
+}: {
+  label: string
+  value: string
+  hint: string
+  tone?: "default" | "collect" | "pay" | "done"
+}) {
+  const valueClass =
+    tone === "collect"
+      ? "text-emerald-700"
+      : tone === "pay"
+        ? "text-red-600"
+        : tone === "done"
+          ? "text-emerald-700"
+          : "text-foreground"
+
+  return (
+    <Card className="p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className={`mt-2 text-2xl font-black tabular-nums ${valueClass}`}>
+        {value}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+    </Card>
+  )
+}
+
+function ReceiptTableRow({
+  receipt,
+  showDate,
+  checked,
+  sharing,
+  onToggle,
+  onView,
+  onShare,
+}: {
+  receipt: Receipt
+  showDate: boolean
+  checked: boolean
+  sharing: boolean
+  onToggle: () => void
+  onView: () => void
+  onShare: () => void
+}) {
+  const settled = receipt.remainingAmount <= 0
+  const cancelled = receipt.status === "cancelled"
+  const amount = Math.abs(receipt.netAmount)
+
+  return (
+    <tr className={`border-t ${cancelled ? "opacity-55" : ""}`}>
+      <td className="px-3 py-3">
+        <Checkbox checked={checked} onCheckedChange={onToggle} />
+      </td>
+      {showDate && (
+        <td className="whitespace-nowrap px-3 py-3 font-medium">
+          {formatDate(receipt.receiptDate)}
+        </td>
+      )}
+      <td className="px-3 py-3">
+        <p className="font-bold">{receipt.member.full_name}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {receipt.groupCount} dây · {receipt.totalShares} chân
+        </p>
+      </td>
+      <td className="px-3 py-3">
+        <DirectionBadge receipt={receipt} />
+      </td>
+      <td className="px-3 py-3 text-right font-bold tabular-nums">
+        {formatVND(amount)}
+      </td>
+      <td className="px-3 py-3">
+        <PaymentBadge receipt={receipt} />
+        {receipt.status === "partial" && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Đã {receipt.direction === "collect" ? "thu" : "chi"}{" "}
+            {formatVND(receipt.paidAmount)} · Còn {formatVND(receipt.remainingAmount)}
+          </p>
+        )}
+        {settled && receipt.paidAmount > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Đã thanh toán {formatVND(receipt.paidAmount)}
+          </p>
+        )}
+      </td>
+      <td className="px-3 py-3">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onShare}
+          disabled={sharing}
+        >
+          {sharing ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <Send className="size-4" />
+          )}
+          Gửi ảnh qua Zalo
+        </Button>
+      </td>
+      <td className="px-3 py-3 text-right">
+        <Button size="sm" variant="outline" onClick={onView}>
+          Xem phiếu
+        </Button>
+      </td>
+    </tr>
+  )
+}
+
+function ReceiptMobileCard({
+  receipt,
+  showDate,
+  checked,
+  sharing,
+  onToggle,
+  onView,
+  onShare,
+}: {
+  receipt: Receipt
+  showDate: boolean
+  checked: boolean
+  sharing: boolean
+  onToggle: () => void
+  onView: () => void
+  onShare: () => void
+}) {
+  return (
+    <Card className={`p-4 ${receipt.status === "cancelled" ? "opacity-55" : ""}`}>
+      <div className="flex items-start gap-3">
+        <Checkbox
+          checked={checked}
+          onCheckedChange={onToggle}
+          className="mt-1 size-5"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate font-bold">{receipt.member.full_name}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {showDate ? `${formatDate(receipt.receiptDate)} · ` : ""}
+                {receipt.groupCount} dây · {receipt.totalShares} chân
+              </p>
+            </div>
+            <p className="shrink-0 text-lg font-black tabular-nums">
+              {formatVND(Math.abs(receipt.netAmount))}
+            </p>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <DirectionBadge receipt={receipt} />
+            <PaymentBadge receipt={receipt} />
+          </div>
+
+          {receipt.status === "partial" && (
+            <p className="mt-2 text-sm font-medium text-amber-800">
+              Đã {receipt.direction === "collect" ? "thu" : "chi"}{" "}
+              {formatVND(receipt.paidAmount)} · Còn {formatVND(receipt.remainingAmount)}
+            </p>
+          )}
+
+          {receipt.remainingAmount <= 0 && receipt.paidAmount > 0 && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Đã thanh toán {formatVND(receipt.paidAmount)}
+            </p>
+          )}
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <Button
+              variant="outline"
+              onClick={onShare}
+              disabled={sharing}
+            >
+              {sharing ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Send className="size-4" />
+              )}
+              Gửi Zalo
+            </Button>
+            <Button variant="outline" onClick={onView}>
+              Xem phiếu
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function DirectionBadge({ receipt }: { receipt: Receipt }) {
+  if (receipt.direction === "balanced") {
+    return (
+      <span className="inline-flex rounded-full bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground">
+        Cân bằng
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+        receipt.direction === "collect"
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-red-100 text-red-600"
+      }`}
+    >
+      {receipt.direction === "collect" ? "Phải thu" : "Phải chi"}
+    </span>
+  )
+}
+
+function PaymentBadge({ receipt }: { receipt: Receipt }) {
+  const className =
+    receipt.status === "paid"
+      ? "bg-emerald-100 text-emerald-700"
+      : receipt.status === "partial"
+        ? "bg-amber-100 text-amber-800"
+        : receipt.status === "cancelled"
+          ? "bg-muted text-muted-foreground"
+          : "bg-amber-100 text-amber-800"
+
+  return (
+    <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${className}`}>
+      {receiptStatusLabel(receipt.status)}
+    </span>
+  )
+}
+
+function PaymentDialog({
+  state,
+  working,
+  onClose,
+  onCreate,
+  onEdit,
+}: {
+  state: PaymentDialogState
+  working: boolean
+  onClose: () => void
+  onCreate: (input: {
+    receipts: Receipt[]
+    transactionDate: string
+    method: "cash" | "transfer"
+    note: string
+    amount?: number
+  }) => void
+  onEdit: (
+    receipt: Receipt,
+    payment: PaymentRow,
+    input: {
+      amount: number
+      transactionDate: string
+      method: EditablePaymentMethod
+      note: string
+    },
+  ) => void
+}) {
+  const [transactionDate, setTransactionDate] = useState(todayInVietnam())
+  const [method, setMethod] = useState<EditablePaymentMethod>("transfer")
+  const [amountText, setAmountText] = useState("")
+  const [note, setNote] = useState("")
+
+  useEffect(() => {
+    if (!state) return
+
+    if (state.mode === "edit") {
+      setTransactionDate(
+        state.payment.transaction_date || state.receipt.receiptDate,
+      )
+      setMethod(normalizeEditableMethod(state.payment.method))
+      setAmountText(formatAmountInput(Number(state.payment.amount)))
+      setNote(state.payment.note ?? "")
+      return
+    }
+
+    setTransactionDate(todayInVietnam())
+    setMethod("transfer")
+    setNote("")
+
+    if (state.receipts.length === 1) {
+      setAmountText(
+        formatAmountInput(state.receipts[0].remainingAmount),
+      )
+    } else {
+      setAmountText("")
+    }
+  }, [state])
+
+  if (!state) return null
+
+  const editing = state.mode === "edit"
+  const receipts = editing ? [state.receipt] : state.receipts
+  const direction = editing
+    ? state.payment.direction
+    : receipts[0]?.direction ?? "collect"
+  const total = editing
+    ? Number(state.payment.amount)
+    : receipts.reduce((n, r) => n + r.remainingAmount, 0)
+  const showAmount = editing || (!editing && state.partial && receipts.length === 1)
+  const amount = showAmount ? parseAmount(amountText) : undefined
+
+  const title = editing
+    ? "Sửa giao dịch"
+    : direction === "collect"
+      ? "Xác nhận thu tiền"
+      : "Xác nhận chi tiền"
+
+  const actionText = editing
+    ? "Lưu thay đổi"
+    : direction === "collect"
+      ? `Xác nhận đã thu${receipts.length > 1 ? ` ${receipts.length} phiếu` : ""}`
+      : `Xác nhận đã chi${receipts.length > 1 ? ` ${receipts.length} phiếu` : ""}`
+
+  const allowLegacy = editing &&
+    (state.payment.method === "legacy_import" || state.payment.method === "other")
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4">
+      <div className="max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-background shadow-2xl sm:max-w-lg sm:rounded-2xl">
+        <div className="border-b p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold">{title}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {editing
+                  ? `${state.receipt.member.full_name} · phiếu ${formatDate(state.receipt.receiptDate)}`
+                  : receipts.length === 1
+                    ? `${receipts[0].member.full_name} · phiếu ${formatDate(receipts[0].receiptDate)}`
+                    : `${receipts.length} phiếu · tổng ${formatVND(total)}`}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              disabled={working}
+            >
+              Đóng
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-4 p-4 sm:p-5">
+          {!showAmount && (
+            <div className="rounded-lg border bg-muted/40 p-3">
+              <p className="text-xs text-muted-foreground">
+                Số tiền ghi nhận
+              </p>
+              <p className="mt-1 text-2xl font-black tabular-nums">
+                {formatVND(total)}
+              </p>
+              {receipts.length > 1 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Mỗi phiếu sẽ tạo một giao dịch riêng bằng đúng số còn lại của phiếu đó.
+                </p>
+              )}
+            </div>
+          )}
+
+          {showAmount && (
+            <label className="block text-sm font-medium">
+              Số tiền
+              <Input
+                className="mt-1.5"
+                inputMode="numeric"
+                value={amountText}
+                onChange={(e) => setAmountText(e.target.value)}
+              />
+            </label>
+          )}
+
+          <label className="block text-sm font-medium">
+            Ngày thanh toán
+            <Input
+              type="date"
+              className="mt-1.5"
+              value={transactionDate}
+              onChange={(e) => setTransactionDate(e.target.value)}
+            />
+          </label>
+
+          <div>
+            <p className="text-sm font-medium">Phương thức</p>
+            <div className="mt-1.5 grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant={method === "transfer" ? "default" : "outline"}
+                onClick={() => setMethod("transfer")}
+              >
+                Chuyển khoản
+              </Button>
+              <Button
+                type="button"
+                variant={method === "cash" ? "default" : "outline"}
+                onClick={() => setMethod("cash")}
+              >
+                Tiền mặt
+              </Button>
+            </div>
+
+            {allowLegacy && (
+              <Button
+                type="button"
+                className="mt-2 w-full"
+                variant={method === "legacy_import" ? "default" : "outline"}
+                onClick={() => setMethod("legacy_import")}
+              >
+                Nhập dữ liệu cũ
+              </Button>
+            )}
+          </div>
+
+          <label className="block text-sm font-medium">
+            Ghi chú
+            <Input
+              className="mt-1.5"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Không bắt buộc"
+            />
+          </label>
+
+          {editing && allowLegacy && (
+            <p className="rounded-lg bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
+              Đây là giao dịch dữ liệu cũ. Bạn có thể sửa số tiền, ngày và đổi sang Chuyển khoản/Tiền mặt sau khi đối chiếu sổ. Nếu thực tế chưa thanh toán, hãy dùng nút Hủy ở lịch sử giao dịch.
+            </p>
+          )}
+        </div>
+
+        <div className="flex gap-2 border-t p-4 sm:p-5">
+          <Button
+            variant="outline"
+            className="flex-1"
+            onClick={onClose}
+            disabled={working}
+          >
+            Hủy
+          </Button>
+          <Button
+            className="flex-1"
+            disabled={
+              working ||
+              !transactionDate ||
+              (showAmount && (!amount || amount <= 0)) ||
+              (!editing && method === "legacy_import")
+            }
+            onClick={() => {
+              if (editing) {
+                if (!amount || amount <= 0) return
+                onEdit(state.receipt, state.payment, {
+                  amount,
+                  transactionDate,
+                  method,
+                  note,
+                })
+                return
+              }
+
+              onCreate({
+                receipts: state.receipts,
+                transactionDate,
+                method: method === "cash" ? "cash" : "transfer",
+                note,
+                amount,
+              })
+            }}
+          >
+            {working && <LoaderCircle className="size-4 animate-spin" />}
+            {actionText}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
 
 function ReceiptPreview({
   receipt,
-  date,
   settings,
   working,
   onBack,
@@ -1932,10 +2904,10 @@ function ReceiptPreview({
   onPartial,
   onEdit,
   onCancel,
+  onEditPayment,
   onCancelPayment,
 }: {
   receipt: Receipt
-  date: string
   settings: SettingsRow
   working: boolean
   onBack: () => void
@@ -1943,9 +2915,11 @@ function ReceiptPreview({
   onPartial: () => void
   onEdit: () => void
   onCancel: () => void
+  onEditPayment: (payment: PaymentRow) => void
   onCancelPayment: (payment: PaymentRow) => void
 }) {
   const [exporting, setExporting] = useState(false)
+  const date = receipt.receiptDate
   const qrUrl = vietQrUrl(settings, receipt, date)
 
   const cancelled = receipt.status === "cancelled"
@@ -1999,8 +2973,8 @@ function ReceiptPreview({
     try {
       const file = await createReceiptJpeg(receipt, date, settings)
       downloadFile(file)
-    } catch (e) {
-      console.error(e)
+    } catch (caught) {
+      console.error(caught)
       window.alert("Không thể xuất ảnh JPG. Vui lòng thử lại.")
     } finally {
       setExporting(false)
@@ -2012,32 +2986,9 @@ function ReceiptPreview({
     setExporting(true)
 
     try {
-      const file = await createReceiptJpeg(receipt, date, settings)
-      const shareText = `Phiếu hụi ngày ${formatDate(date)}`
-
-      if (
-        navigator.share &&
-        (!navigator.canShare || navigator.canShare({ files: [file] }))
-      ) {
-        try {
-          await navigator.share({
-            title: shareText,
-            text: shareText,
-            files: [file],
-          })
-          return
-        } catch (e) {
-          if (e instanceof DOMException && e.name === "AbortError") return
-          console.error(e)
-        }
-      }
-
-      downloadFile(file)
-      window.alert(
-        "Thiết bị này chưa hỗ trợ chia sẻ ảnh trực tiếp. Phiếu JPG đã được lưu xuống máy. Bạn mở Zalo và chọn ảnh vừa lưu để gửi.",
-      )
-    } catch (e) {
-      console.error(e)
+      await shareReceiptJpg(receipt, settings)
+    } catch (caught) {
+      console.error(caught)
       window.alert(
         "Không thể tạo ảnh phiếu để gửi Zalo. Vui lòng thử lại.",
       )
@@ -2427,13 +3378,19 @@ function ReceiptPreview({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-semibold">
-                      {payment.direction === "collect" ? "Thu" : "Chi"}{" "}
-                      {formatVND(Number(payment.amount))}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {paymentMethodLabel(payment.method)} ·{" "}
-                      {new Date(payment.created_at).toLocaleString("vi-VN")}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold">
+                        {payment.direction === "collect" ? "Thu" : "Chi"}{" "}
+                        {formatVND(Number(payment.amount))}
+                      </p>
+                      {(payment.method === "legacy_import" || payment.method === "other") && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                          Dữ liệu cũ
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {paymentMethodLabel(payment.method)} · Ngày thanh toán {formatDate(payment.transaction_date)}
                     </p>
 
                     {payment.note && (
@@ -2448,16 +3405,27 @@ function ReceiptPreview({
                   </div>
 
                   {payment.status === "active" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-destructive"
-                      onClick={() => onCancelPayment(payment)}
-                      disabled={working || exporting}
-                    >
-                      <Undo2 className="size-4" />
-                      Hủy
-                    </Button>
+                    <div className="flex shrink-0 gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onEditPayment(payment)}
+                        disabled={working || exporting}
+                      >
+                        <Pencil className="size-4" />
+                        Sửa
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={() => onCancelPayment(payment)}
+                        disabled={working || exporting}
+                      >
+                        <Undo2 className="size-4" />
+                        Hủy
+                      </Button>
+                    </div>
                   )}
                 </div>
               </div>
