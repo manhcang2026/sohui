@@ -1550,40 +1550,44 @@ function LuckyWheelDialog({
     }
   }, [])
 
+  const count = Math.max(
+    candidates.length,
+    1,
+  )
+
   const sliceAngle =
-    360 / Math.max(candidates.length, 1)
+    360 / count
 
-  const wheelGradient = useMemo(() => {
-    const colors = [
-      "#dbeafe",
-      "#fef3c7",
-      "#dcfce7",
-      "#fce7f3",
-      "#ede9fe",
-      "#ffedd5",
-    ]
+  const wheelGradient =
+    useMemo(() => {
+      const colors = [
+        "#dbeafe",
+        "#fef3c7",
+        "#dcfce7",
+        "#f3e8ff",
+      ]
 
-    return `conic-gradient(${candidates
-      .map((_, index) => {
-        const start =
-          index * sliceAngle
+      return `conic-gradient(${candidates
+        .map((_, index) => {
+          const start =
+            index * sliceAngle
 
-        const end =
-          (index + 1) *
-          sliceAngle
+          const end =
+            (index + 1) *
+            sliceAngle
 
-        return `${
-          colors[
-            index %
-              colors.length
-          ]
-        } ${start}deg ${end}deg`
-      })
-      .join(", ")})`
-  }, [
-    candidates,
-    sliceAngle,
-  ])
+          return `${
+            colors[
+              index %
+                colors.length
+            ]
+          } ${start}deg ${end}deg`
+        })
+        .join(", ")})`
+    }, [
+      candidates,
+      sliceAngle,
+    ])
 
   function spinWheel() {
     if (
@@ -1609,20 +1613,29 @@ function LuckyWheelDialog({
         sliceAngle +
       sliceAngle / 2
 
-    const targetRotation =
-      360 * 6 +
-      (360 - chosenCenter)
+    const desiredAngle =
+      (360 - chosenCenter) %
+      360
 
     setResult(null)
     setSpinning(true)
-    setRotation(0)
 
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setRotation(
-          targetRotation,
-        )
-      })
+    setRotation((current) => {
+      const currentAngle =
+        ((current % 360) + 360) %
+        360
+
+      const adjustment =
+        (desiredAngle -
+          currentAngle +
+          360) %
+        360
+
+      return (
+        current +
+        8 * 360 +
+        adjustment
+      )
     })
 
     timerRef.current =
@@ -1634,7 +1647,7 @@ function LuckyWheelDialog({
         )
 
         setSpinning(false)
-      }, 3200)
+      }, 5050)
   }
 
   return (
@@ -1646,9 +1659,9 @@ function LuckyWheelDialog({
     >
       <Card className="max-h-[96vh] w-full max-w-lg overflow-y-auto p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Dices className="size-5 text-primary" />
+              <Dices className="size-5 shrink-0 text-primary" />
 
               <h2 className="text-lg font-bold">
                 Bốc thăm người hốt
@@ -1679,27 +1692,37 @@ function LuckyWheelDialog({
           </div>
         ) : (
           <>
-            <div className="mt-6 flex justify-center">
-              <div className="relative h-[280px] w-[280px] max-w-full">
-                <div className="absolute left-1/2 top-[-7px] z-20 -translate-x-1/2">
+            <div className="mt-5 flex justify-center">
+              <div className="relative h-[300px] w-[300px] sm:h-[340px] sm:w-[340px]">
+                {/* Kim chỉ */}
+                <div className="absolute left-1/2 top-[-4px] z-30 -translate-x-1/2">
                   <div
-                    className="h-0 w-0 border-x-[14px] border-t-[24px] border-x-transparent border-t-foreground"
+                    className="h-0 w-0 border-x-[15px] border-t-[26px] border-x-transparent border-t-foreground"
                     aria-hidden="true"
                   />
                 </div>
 
+                {/* Viền ngoài */}
+                <div className="absolute inset-1 rounded-full border border-border bg-card shadow-sm" />
+
+                {/* Bánh xe */}
                 <div
-                  className="absolute inset-0 overflow-hidden rounded-full border-4 border-background shadow-md"
+                  className="absolute inset-3 overflow-hidden rounded-full border-4 border-background shadow-md"
                   style={{
                     background:
                       wheelGradient,
+
                     transform: `rotate(${rotation}deg)`,
+
                     transition:
                       spinning
-                        ? "transform 3.2s cubic-bezier(0.12, 0.68, 0.14, 1)"
+                        ? "transform 5s cubic-bezier(0.08, 0.72, 0.12, 1)"
                         : "none",
                   }}
                 >
+                  {/* Vòng trắng bên trong */}
+                  <div className="absolute inset-[27%] rounded-full border-2 border-background/80 bg-background/15" />
+
                   {candidates.map(
                     (
                       candidate,
@@ -1711,12 +1734,21 @@ function LuckyWheelDialog({
                         sliceAngle /
                           2
 
+                      /*
+                       * Với nhiều chân, chỉ hiện số.
+                       * Không ghi chữ "Chân" để tránh rối.
+                       */
+                      const radius =
+                        candidates.length >
+                        30
+                          ? 122
+                          : 126
+
                       return (
                         <div
                           key={
                             candidate
-                              .share
-                              .id
+                              .share.id
                           }
                           className="absolute left-1/2 top-1/2 h-0 w-0"
                           style={{
@@ -1724,12 +1756,13 @@ function LuckyWheelDialog({
                           }}
                         >
                           <span
-                            className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[112px] whitespace-nowrap rounded bg-background/80 px-1.5 py-0.5 text-[11px] font-bold text-foreground"
+                            className="absolute left-1/2 flex size-6 -translate-x-1/2 items-center justify-center rounded-full bg-background/80 text-[10px] font-bold tabular-nums text-foreground sm:text-[11px]"
                             style={{
+                              top: `-${radius}px`,
+
                               transform: `rotate(${-angle}deg)`,
                             }}
                           >
-                            Chân{" "}
                             {
                               candidate
                                 .share
@@ -1741,23 +1774,30 @@ function LuckyWheelDialog({
                     },
                   )}
 
-                  <div className="absolute left-1/2 top-1/2 flex size-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-background bg-primary text-primary-foreground shadow">
-                    <Sparkles className="size-5" />
+                  {/* Tâm vòng quay */}
+                  <div className="absolute left-1/2 top-1/2 z-20 flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-background bg-primary text-primary-foreground shadow-md">
+                    {spinning ? (
+                      <RotateCw className="size-6 animate-spin" />
+                    ) : (
+                      <Dices className="size-6" />
+                    )}
                   </div>
                 </div>
               </div>
             </div>
 
             <div
-              className="mt-5 min-h-[82px] rounded-lg border bg-muted/30 p-4 text-center"
+              className="mt-5 min-h-[92px] rounded-lg border bg-muted/30 p-4 text-center"
               aria-live="polite"
             >
               {spinning ? (
                 <>
-                  <RotateCw className="mx-auto size-5 animate-spin text-primary" />
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Đang bốc thăm
+                  </p>
 
                   <p className="mt-2 font-semibold">
-                    Đang bốc thăm...
+                    Vòng quay đang giảm tốc...
                   </p>
                 </>
               ) : result ? (
@@ -1766,7 +1806,7 @@ function LuckyWheelDialog({
                     Kết quả
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-2xl font-bold">
                     Chân{" "}
                     {
                       result
@@ -1775,7 +1815,7 @@ function LuckyWheelDialog({
                     }
                   </p>
 
-                  <p className="mt-0.5 font-semibold text-primary">
+                  <p className="mt-1 font-semibold text-primary">
                     {result.member
                       ?.full_name ??
                       "Không rõ"}
@@ -1788,7 +1828,7 @@ function LuckyWheelDialog({
                   </p>
 
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Vòng quay chỉ gồm các chân chưa từng hốt.
+                    Chỉ các chân chưa từng hốt mới có trong vòng quay.
                   </p>
                 </>
               )}
@@ -1802,6 +1842,7 @@ function LuckyWheelDialog({
                 onClick={spinWheel}
               >
                 <Dices className="size-5" />
+
                 {result
                   ? "Quay lại"
                   : "QUAY"}
@@ -1833,7 +1874,7 @@ function LuckyWheelDialog({
             </div>
 
             <p className="mt-3 text-center text-xs leading-relaxed text-muted-foreground">
-              Kết quả bốc thăm chưa được lưu cho đến khi bạn chọn người này và chốt kỳ.
+              Kết quả chỉ được đưa vào kỳ hụi sau khi bạn chọn người này và chốt kỳ.
             </p>
           </>
         )}
