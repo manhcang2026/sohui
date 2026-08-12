@@ -1134,7 +1134,9 @@ export function PhieuThuChiPage() {
           if (
             share.id === period.winner_share_id
           ) {
-            deadShares += 1
+            // Chân vừa hốt vẫn được tính là chân sống
+            // trong chính kỳ hốt. Từ kỳ sau mới là chân chết.
+            liveShares += 1
             continue
           }
 
