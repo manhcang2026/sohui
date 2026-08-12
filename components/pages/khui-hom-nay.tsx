@@ -14,9 +14,10 @@ import {
   ChevronRight,
   Clock3,
   LoaderCircle,
-  Pencil,
+  LockKeyhole,
+  Minus,
+  Plus,
   RefreshCw,
-  Users,
   X,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -98,6 +99,7 @@ function formatDate(value: string) {
 
 function formatTime(value: string | null | undefined) {
   if (!value) return "—"
+
   if (value.includes("T")) {
     return new Date(value).toLocaleTimeString("vi-VN", {
       hour: "2-digit",
@@ -105,6 +107,7 @@ function formatTime(value: string | null | undefined) {
       timeZone: "Asia/Ho_Chi_Minh",
     })
   }
+
   return value.slice(0, 5)
 }
 
@@ -114,17 +117,6 @@ function formatVND(value: number) {
     currency: "VND",
     maximumFractionDigits: 0,
   }).format(Number(value || 0))
-}
-
-function formatMoneyInput(value: string | number | null | undefined) {
-  const digits = String(value ?? "").replace(/\D/g, "")
-  if (!digits) return ""
-  return new Intl.NumberFormat("vi-VN").format(Number(digits))
-}
-
-function numericValue(value: string | null | undefined) {
-  const digits = String(value ?? "").replace(/\D/g, "")
-  return digits ? Number(digits) : 0
 }
 
 function isCompleted(status: string) {
@@ -155,9 +147,12 @@ export function KhuiHomNayPage() {
   const [shares, setShares] = useState<ShareRow[]>([])
   const [periods, setPeriods] = useState<PeriodRow[]>([])
   const [members, setMembers] = useState<MemberRow[]>([])
-  const [periodPayments, setPeriodPayments] = useState<PeriodPaymentRow[]>([])
-  const [selectedDate, setSelectedDate] = useState(todayInVietnam())
-  const [editingPeriodId, setEditingPeriodId] = useState<string | null>(null)
+  const [periodPayments, setPeriodPayments] =
+    useState<PeriodPaymentRow[]>([])
+  const [selectedDate, setSelectedDate] =
+    useState(todayInVietnam())
+  const [editingPeriodId, setEditingPeriodId] =
+    useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
@@ -166,33 +161,47 @@ export function KhuiHomNayPage() {
     setError("")
 
     const supabase = createClient()
-    const [groupsResult, sharesResult, periodsResult, membersResult, paymentsResult] =
-      await Promise.all([
-        supabase
-          .from("hui_groups")
-          .select(
-            "id, code, name, contribution_amount, total_shares, fee_amount, minimum_bid_amount, bid_step_amount, opening_time, status",
-          )
-          .eq("status", "active"),
-        supabase
-          .from("hui_shares")
-          .select("id, group_id, member_id, share_number, status")
-          .order("share_number"),
-        supabase
-          .from("hui_periods")
-          .select(
-            "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes",
-          )
-          .order("scheduled_date")
-          .order("period_number"),
-        supabase
-          .from("members")
-          .select("id, full_name, phone")
-          .order("full_name"),
-        supabase
-          .from("receipt_payments")
-          .select("id, source_period_id, direction, amount, status"),
-      ])
+
+    const [
+      groupsResult,
+      sharesResult,
+      periodsResult,
+      membersResult,
+      paymentsResult,
+    ] = await Promise.all([
+      supabase
+        .from("hui_groups")
+        .select(
+          "id, code, name, contribution_amount, total_shares, fee_amount, minimum_bid_amount, bid_step_amount, opening_time, status",
+        )
+        .eq("status", "active"),
+
+      supabase
+        .from("hui_shares")
+        .select(
+          "id, group_id, member_id, share_number, status",
+        )
+        .order("share_number"),
+
+      supabase
+        .from("hui_periods")
+        .select(
+          "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes",
+        )
+        .order("scheduled_date")
+        .order("period_number"),
+
+      supabase
+        .from("members")
+        .select("id, full_name, phone")
+        .order("full_name"),
+
+      supabase
+        .from("receipt_payments")
+        .select(
+          "id, source_period_id, direction, amount, status",
+        ),
+    ])
 
     const firstError =
       groupsResult.error ??
@@ -203,9 +212,7 @@ export function KhuiHomNayPage() {
 
     if (firstError) {
       console.error(firstError)
-      setError(
-        "Không thể tải dữ liệu Khui hôm nay. Kiểm tra kết nối Supabase và migration source_period_id.",
-      )
+      setError("Không thể tải dữ liệu khui kỳ.")
       setLoading(false)
       return
     }
@@ -214,7 +221,9 @@ export function KhuiHomNayPage() {
     setShares((sharesResult.data ?? []) as ShareRow[])
     setPeriods((periodsResult.data ?? []) as PeriodRow[])
     setMembers((membersResult.data ?? []) as MemberRow[])
-    setPeriodPayments((paymentsResult.data ?? []) as PeriodPaymentRow[])
+    setPeriodPayments(
+      (paymentsResult.data ?? []) as PeriodPaymentRow[],
+    )
     setLoading(false)
   }, [])
 
@@ -228,7 +237,10 @@ export function KhuiHomNayPage() {
   )
 
   const membersById = useMemo(
-    () => new Map(members.map((member) => [member.id, member])),
+    () =>
+      new Map(
+        members.map((member) => [member.id, member]),
+      ),
     [members],
   )
 
@@ -254,10 +266,14 @@ export function KhuiHomNayPage() {
       )
       .map((period) => {
         const group = groupsById.get(period.group_id)!
-        const groupShares = sharesByGroup.get(group.id) ?? []
+        const groupShares =
+          sharesByGroup.get(group.id) ?? []
+
         const winnerShare = groupShares.find(
-          (share) => share.id === period.winner_share_id,
+          (share) =>
+            share.id === period.winner_share_id,
         )
+
         const winner = winnerShare
           ? membersById.get(winnerShare.member_id) ?? null
           : null
@@ -277,10 +293,24 @@ export function KhuiHomNayPage() {
         }
       })
       .sort((a, b) => {
-        const timeA = a.group.opening_time ?? ""
-        const timeB = b.group.opening_time ?? ""
-        if (timeA !== timeB) return timeA.localeCompare(timeB)
-        return a.group.name.localeCompare(b.group.name, "vi")
+        const timeA =
+          a.period.scheduled_at ??
+          a.group.opening_time ??
+          ""
+
+        const timeB =
+          b.period.scheduled_at ??
+          b.group.opening_time ??
+          ""
+
+        if (timeA !== timeB) {
+          return timeA.localeCompare(timeB)
+        }
+
+        return a.group.name.localeCompare(
+          b.group.name,
+          "vi",
+        )
       })
   }, [
     groupsById,
@@ -292,27 +322,57 @@ export function KhuiHomNayPage() {
   ])
 
   const availableDates = useMemo(() => {
-    const activeGroupIds = new Set(groups.map((group) => group.id))
+    const activeGroupIds = new Set(
+      groups.map((group) => group.id),
+    )
 
-    return [...new Set(
-      periods
-        .filter(
-          (period) =>
-            activeGroupIds.has(period.group_id) &&
-            period.status !== "cancelled",
-        )
-        .map((period) => period.scheduled_date),
-    )]
+    return [
+      ...new Set(
+        periods
+          .filter(
+            (period) =>
+              activeGroupIds.has(period.group_id) &&
+              period.status !== "cancelled",
+          )
+          .map((period) => period.scheduled_date),
+      ),
+    ]
       .sort((a, b) => b.localeCompare(a))
       .slice(0, 12)
   }, [groups, periods])
 
   const editingItem =
-    items.find((item) => item.period.id === editingPeriodId) ?? null
+    items.find(
+      (item) =>
+        item.period.id === editingPeriodId,
+    ) ?? null
 
   const completedCount = items.filter((item) =>
     isCompleted(item.period.status),
   ).length
+
+  async function handleSaved(
+    currentPeriodId: string,
+  ) {
+    const currentIndex = items.findIndex(
+      (item) =>
+        item.period.id === currentPeriodId,
+    )
+
+    const nextItem =
+      items
+        .slice(currentIndex + 1)
+        .find(
+          (item) =>
+            !isCompleted(item.period.status),
+        ) ?? null
+
+    await loadData()
+
+    setEditingPeriodId(
+      nextItem?.period.id ?? null,
+    )
+  }
 
   if (loading) {
     return (
@@ -324,18 +384,36 @@ export function KhuiHomNayPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
-      <div>
-        <h1 className="text-xl font-bold">Khui hôm nay</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Dữ liệu thật từ Supabase. Có thể chọn ngày cũ để kiểm tra và test.
-        </p>
+    <div className="mx-auto max-w-6xl space-y-4 p-4 md:p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold md:text-2xl">
+            Khui kỳ
+          </h1>
+
+          <p className="mt-1 text-sm text-muted-foreground">
+            {formatDate(selectedDate)} ·{" "}
+            {completedCount}/{items.length} dây đã chốt
+          </p>
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void loadData()}
+        >
+          <RefreshCw className="size-4" />
+          <span className="hidden sm:inline">
+            Làm mới
+          </span>
+        </Button>
       </div>
 
       <Card className="p-4">
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr_auto] sm:items-end">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr] sm:items-end">
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Ngày khui
+
             <Input
               type="date"
               value={selectedDate}
@@ -350,6 +428,7 @@ export function KhuiHomNayPage() {
             <p className="mb-1.5 text-xs font-medium text-muted-foreground">
               Ngày có kỳ gần đây
             </p>
+
             <div className="flex gap-2 overflow-x-auto pb-1">
               {availableDates.map((date) => (
                 <button
@@ -370,11 +449,6 @@ export function KhuiHomNayPage() {
               ))}
             </div>
           </div>
-
-          <Button variant="outline" onClick={() => void loadData()}>
-            <RefreshCw className="size-4" />
-            Làm mới
-          </Button>
         </div>
       </Card>
 
@@ -384,64 +458,70 @@ export function KhuiHomNayPage() {
         </Card>
       )}
 
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="font-semibold">
-            {formatDate(selectedDate)}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {completedCount}/{items.length} kỳ đã chốt
-          </p>
-        </div>
-
-        {items.length > 0 && completedCount === items.length && (
-          <Badge variant="secondary">
-            <CheckCircle2 className="mr-1 size-3.5" />
-            Đã xử lý hết
-          </Badge>
-        )}
-      </div>
-
       {items.length === 0 ? (
         <Card className="flex flex-col items-center gap-3 p-10 text-center">
           <CalendarDays className="size-8 text-muted-foreground" />
+
           <div>
             <p className="font-medium">
-              Không có kỳ của dây đang hoạt động trong ngày này
+              Không có dây cần khui trong ngày này
             </p>
+
             <p className="mt-1 text-sm text-muted-foreground">
-              Chọn một ngày ở danh sách phía trên để test bằng dữ liệu cũ.
+              Chọn một ngày khác để xem các kỳ đã lên lịch.
             </p>
           </div>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {items.map((item) => (
-            <PeriodCard
-              key={item.period.id}
-              item={item}
-              onOpen={() => setEditingPeriodId(item.period.id)}
-            />
-          ))}
-        </div>
-      )}
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold">
+                Tiến độ trong ngày
+              </p>
 
-      <Card className="p-4 text-xs leading-relaxed text-muted-foreground">
-        Trang này chỉ chốt kết quả kỳ: người hốt, giá thăm, ngày giờ và tiền
-        thảo. Sau khi chốt, Phiếu thu–chi tự tính nghĩa vụ. Việc xác nhận tiền
-        thật vẫn thực hiện ở Phiếu hoặc nút “Đã thu/chi đủ kỳ” trong Cân đối.
-      </Card>
+              <p className="text-sm text-muted-foreground">
+                {completedCount}/{items.length} dây đã chốt
+              </p>
+            </div>
+
+            {completedCount === items.length && (
+              <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+                <CheckCircle2 className="mr-1 size-3.5" />
+                Đã xử lý hết
+              </Badge>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {items.map((item) => (
+              <PeriodCard
+                key={item.period.id}
+                item={item}
+                onOpen={() =>
+                  setEditingPeriodId(
+                    item.period.id,
+                  )
+                }
+              />
+            ))}
+          </div>
+        </>
+      )}
 
       {editingItem && (
         <KhuiDialog
           item={editingItem}
           allPeriods={periods}
           membersById={membersById}
-          onClose={() => setEditingPeriodId(null)}
-          onSaved={async () => {
+          onClose={() =>
             setEditingPeriodId(null)
-            await loadData()
-          }}
+          }
+          onSaved={() =>
+            handleSaved(
+              editingItem.period.id,
+            )
+          }
         />
       )}
     </div>
@@ -455,47 +535,82 @@ function PeriodCard({
   item: PeriodItem
   onOpen: () => void
 }) {
-  const completed = isCompleted(item.period.status)
+  const completed = isCompleted(
+    item.period.status,
+  )
 
   return (
     <Card className="p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="font-mono text-xs">
+            <Badge
+              variant="outline"
+              className="font-mono text-xs"
+            >
               {item.group.code || "CHƯA-MÃ"}
             </Badge>
-            <p className="font-semibold">{item.group.name}</p>
+
+            <p className="font-semibold">
+              {item.group.name}
+            </p>
           </div>
 
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>
-              Kỳ {item.period.period_number}/{item.group.total_shares}
+              Kỳ {item.period.period_number}/
+              {item.group.total_shares}
             </span>
+
             <span>
               <Clock3 className="mr-1 inline size-3" />
-              {formatTime(item.period.scheduled_at ?? item.group.opening_time)}
+
+              {formatTime(
+                item.period.scheduled_at ??
+                  item.group.opening_time,
+              )}
             </span>
-            <span>{formatVND(item.group.contribution_amount)}/chân</span>
+
+            <span>
+              {formatVND(
+                item.group.contribution_amount,
+              )}
+              /chân
+            </span>
           </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <Badge variant={completed ? "secondary" : "outline"}>
-            {periodStatusLabel(item.period.status)}
+          <Badge
+            className={
+              completed
+                ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
+                : "bg-amber-100 text-amber-800 hover:bg-amber-100"
+            }
+          >
+            {completed && (
+              <CheckCircle2 className="mr-1 size-3.5" />
+            )}
+
+            {periodStatusLabel(
+              item.period.status,
+            )}
           </Badge>
 
           <Button
             size="sm"
-            variant={completed ? "outline" : "default"}
+            variant={
+              completed
+                ? "outline"
+                : "default"
+            }
             onClick={onOpen}
           >
-            {completed ? (
-              <Pencil className="size-4" />
-            ) : (
-              <ChevronRight className="size-4" />
-            )}
-            {completed ? "Xem / sửa" : "Khui kỳ"}
+            {completed
+              ? "Xem lại"
+              : "Khui dây này"}
+
+            <ChevronRight className="size-4" />
           </Button>
         </div>
       </div>
@@ -504,19 +619,33 @@ function PeriodCard({
         <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 sm:grid-cols-4">
           <MiniStat
             label="Người hốt"
-            value={item.winner?.full_name ?? "Không rõ"}
+            value={
+              item.winner?.full_name ??
+              "Không rõ"
+            }
           />
+
           <MiniStat
             label="Giá thăm"
-            value={formatVND(item.period.bid_amount)}
+            value={formatVND(
+              item.period.bid_amount,
+            )}
           />
+
           <MiniStat
             label="Tiền thảo"
-            value={formatVND(item.period.fee_amount)}
+            value={formatVND(
+              item.period.fee_amount,
+            )}
           />
+
           <MiniStat
             label="Tiền đã xác nhận"
-            value={item.hasConfirmedMoney ? "Có" : "Chưa"}
+            value={
+              item.hasConfirmedMoney
+                ? "Có"
+                : "Chưa"
+            }
           />
         </div>
       )}
@@ -524,11 +653,22 @@ function PeriodCard({
   )
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
   return (
     <div className="min-w-0 rounded-md bg-muted/50 p-2.5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-0.5 break-words text-sm font-semibold">{value}</p>
+      <p className="text-xs text-muted-foreground">
+        {label}
+      </p>
+
+      <p className="mt-0.5 break-words text-sm font-semibold">
+        {value}
+      </p>
     </div>
   )
 }
@@ -546,11 +686,26 @@ function KhuiDialog({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
-  const { period, group, shares, hasConfirmedMoney } = item
+  const {
+    period,
+    group,
+    shares,
+    hasConfirmedMoney,
+  } = item
+
+  const completed = isCompleted(period.status)
+  const locked =
+    hasConfirmedMoney && completed
 
   const groupPeriods = allPeriods
-    .filter((current) => current.group_id === group.id)
-    .sort((a, b) => a.period_number - b.period_number)
+    .filter(
+      (current) =>
+        current.group_id === group.id,
+    )
+    .sort(
+      (a, b) =>
+        a.period_number - b.period_number,
+    )
 
   const previousWinnerIds = useMemo(
     () =>
@@ -558,11 +713,15 @@ function KhuiDialog({
         groupPeriods
           .filter(
             (current) =>
-              current.period_number < period.period_number &&
+              current.period_number <
+                period.period_number &&
               isCompleted(current.status) &&
               current.winner_share_id,
           )
-          .map((current) => current.winner_share_id as string),
+          .map(
+            (current) =>
+              current.winner_share_id as string,
+          ),
       ),
     [groupPeriods, period.period_number],
   )
@@ -573,38 +732,98 @@ function KhuiDialog({
         .filter(
           (share) =>
             share.status === "active" &&
-            (!previousWinnerIds.has(share.id) ||
-              share.id === period.winner_share_id),
+            (!previousWinnerIds.has(
+              share.id,
+            ) ||
+              share.id ===
+                period.winner_share_id),
         )
-        .sort((a, b) => a.share_number - b.share_number),
-    [period.winner_share_id, previousWinnerIds, shares],
+        .sort(
+          (a, b) =>
+            a.share_number -
+            b.share_number,
+        ),
+    [
+      period.winner_share_id,
+      previousWinnerIds,
+      shares,
+    ],
   )
 
-  const [winnerShareId, setWinnerShareId] = useState(
-    period.winner_share_id ?? "",
+  const minimumBid = Number(
+    group.minimum_bid_amount || 0,
   )
-  const [bidAmount, setBidAmount] = useState(
-    period.bid_amount ? formatMoneyInput(period.bid_amount) : "",
+
+  const bidStep = Number(
+    group.bid_step_amount || 0,
   )
-  const [openedAt, setOpenedAt] = useState(defaultOpenedAt(period, group))
-  const [notes, setNotes] = useState(period.notes ?? "")
-  const [saving, setSaving] = useState(false)
+
+  const initialBid =
+    period.bid_amount > 0
+      ? Number(period.bid_amount)
+      : minimumBid
+
+  const [winnerShareId, setWinnerShareId] =
+    useState(
+      period.winner_share_id ?? "",
+    )
+
+  const [bidAmount, setBidAmount] =
+    useState(initialBid)
+
+  const [openedAt, setOpenedAt] =
+    useState(
+      defaultOpenedAt(period, group),
+    )
+
+  const [notes, setNotes] = useState(
+    period.notes ?? "",
+  )
+
+  const [previewReady, setPreviewReady] =
+    useState(completed)
+
+  const [saving, setSaving] =
+    useState(false)
+
   const [error, setError] = useState("")
 
+  const fee = completed
+    ? Number(
+        period.fee_amount ||
+          group.fee_amount ||
+          0,
+      )
+    : Number(group.fee_amount || 0)
+
   const preview = useMemo(() => {
-    const bid = numericValue(bidAmount)
-    const contribution = Number(group.contribution_amount || 0)
-    const liveContribution = Math.max(0, contribution - bid)
-    const fee = Number(period.fee_amount || group.fee_amount || 0)
+    const bid = Number(bidAmount || 0)
+    const contribution = Number(
+      group.contribution_amount || 0,
+    )
+
+    const liveContribution = Math.max(
+      0,
+      contribution - bid,
+    )
 
     let livePayers = 0
     let deadPayers = 0
     let grossHui = 0
 
-    for (const share of shares.filter((share) => share.status === "active")) {
-      if (share.id === winnerShareId) continue
+    for (const share of shares.filter(
+      (share) =>
+        share.status === "active",
+    )) {
+      if (share.id === winnerShareId) {
+        continue
+      }
 
-      if (previousWinnerIds.has(share.id)) {
+      if (
+        previousWinnerIds.has(
+          share.id,
+        )
+      ) {
         deadPayers += 1
         grossHui += contribution
       } else {
@@ -617,127 +836,237 @@ function KhuiDialog({
       bid,
       contribution,
       liveContribution,
-      fee,
       livePayers,
       deadPayers,
       grossHui,
-      payout: Math.max(0, grossHui - fee),
+      payout: Math.max(
+        0,
+        grossHui - fee,
+      ),
     }
   }, [
     bidAmount,
+    fee,
     group.contribution_amount,
-    group.fee_amount,
-    period.fee_amount,
     previousWinnerIds,
     shares,
     winnerShareId,
   ])
 
-  const winnerShare = shares.find((share) => share.id === winnerShareId)
+  const winnerShare = shares.find(
+    (share) =>
+      share.id === winnerShareId,
+  )
+
   const winnerMember = winnerShare
-    ? membersById.get(winnerShare.member_id) ?? null
+    ? membersById.get(
+        winnerShare.member_id,
+      ) ?? null
     : null
 
   function validateBid(value: number) {
-    const minBid = Number(group.minimum_bid_amount || 0)
-    const bidStep = Number(group.bid_step_amount || 0)
-
-    if (value < minBid) {
-      return `Giá thăm phải từ ${formatVND(minBid)} trở lên.`
+    if (value < minimumBid) {
+      return `Giá thăm phải từ ${formatVND(
+        minimumBid,
+      )} trở lên.`
     }
 
-    if (bidStep > 0 && (value - minBid) % bidStep !== 0) {
-      return `Giá thăm phải theo bước ${formatVND(bidStep)} từ mức ${formatVND(minBid)}.`
+    if (
+      bidStep > 0 &&
+      (value - minimumBid) %
+        bidStep !==
+        0
+    ) {
+      return `Giá thăm phải theo bước ${formatVND(
+        bidStep,
+      )}.`
     }
 
-    if (value >= Number(group.contribution_amount || 0)) {
+    if (
+      value >=
+      Number(
+        group.contribution_amount || 0,
+      )
+    ) {
       return "Giá thăm phải nhỏ hơn mệnh giá mỗi chân."
     }
 
     return ""
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  function changeBid(
+    direction: "down" | "up",
+  ) {
+    if (locked) return
+
+    const step =
+      bidStep > 0 ? bidStep : 1
+
+    const next =
+      direction === "up"
+        ? bidAmount + step
+        : bidAmount - step
+
+    const safeNext = Math.max(
+      minimumBid,
+      next,
+    )
+
+    if (
+      safeNext >=
+      Number(
+        group.contribution_amount || 0,
+      )
+    ) {
+      return
+    }
+
+    setBidAmount(safeNext)
+    setPreviewReady(false)
+    setError("")
+  }
+
+  function calculatePreview() {
     setError("")
 
-    if (hasConfirmedMoney && isCompleted(period.status)) {
+    if (!winnerShareId) {
       setError(
-        "Kỳ này đã có tiền được xác nhận. Hãy hủy/điều chỉnh xác nhận thu–chi liên quan trước khi sửa kết quả kỳ.",
+        "Bạn cần chọn chân hốt trước.",
       )
       return
     }
 
-    if (!winnerShareId) {
-      setError("Bạn cần chọn chân hốt.")
-      return
-    }
-
-    const bid = numericValue(bidAmount)
-    const bidError = validateBid(bid)
+    const bidError =
+      validateBid(bidAmount)
 
     if (bidError) {
       setError(bidError)
       return
     }
 
+    setPreviewReady(true)
+  }
+
+  async function submit(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault()
+    setError("")
+
+    if (locked) {
+      setError(
+        "Kỳ này đã có tiền được xác nhận. Hãy hủy hoặc điều chỉnh xác nhận thu–chi liên quan trước khi sửa kết quả kỳ.",
+      )
+      return
+    }
+
+    if (!winnerShareId) {
+      setError(
+        "Bạn cần chọn chân hốt.",
+      )
+      return
+    }
+
+    const bidError =
+      validateBid(bidAmount)
+
+    if (bidError) {
+      setError(bidError)
+      return
+    }
+
+    if (!previewReady) {
+      setError(
+        "Hãy bấm Tính thử trước khi chốt kỳ.",
+      )
+      return
+    }
+
     if (!openedAt) {
-      setError("Ngày giờ khui là bắt buộc.")
+      setError(
+        "Ngày giờ khui là bắt buộc.",
+      )
       return
     }
 
     setSaving(true)
 
     try {
-      const openedAtIso = new Date(`${openedAt}:00+07:00`).toISOString()
+      const openedAtIso = new Date(
+        `${openedAt}:00+07:00`,
+      ).toISOString()
 
-      const { error: updateError } = await createClient()
-        .from("hui_periods")
-        .update({
-          winner_share_id: winnerShareId,
-          bid_amount: bid,
-          fee_amount: group.fee_amount,
-          opened_at: openedAtIso,
-          status: "completed",
-          notes: notes.trim() || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", period.id)
+      const { error: updateError } =
+        await createClient()
+          .from("hui_periods")
+          .update({
+            winner_share_id:
+              winnerShareId,
+            bid_amount: bidAmount,
+            fee_amount:
+              group.fee_amount,
+            opened_at: openedAtIso,
+            status: "completed",
+            notes:
+              notes.trim() || null,
+            updated_at:
+              new Date().toISOString(),
+          })
+          .eq("id", period.id)
 
-      if (updateError) throw updateError
+      if (updateError) {
+        throw updateError
+      }
 
       await onSaved()
     } catch (caught) {
       console.error(caught)
-      setError("Không thể lưu kết quả kỳ khui.")
+
+      setError(
+        "Không thể lưu kết quả kỳ khui.",
+      )
+
       setSaving(false)
     }
   }
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/50 p-4"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/50 p-3 sm:p-4"
       role="dialog"
       aria-modal="true"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          onClose()
+        }
       }}
     >
-      <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto p-5">
+      <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="font-mono">
+              <Badge
+                variant="outline"
+                className="font-mono"
+              >
                 {group.code || "CHƯA-MÃ"}
               </Badge>
+
               <h2 className="text-lg font-bold">
-                {isCompleted(period.status)
+                {completed
                   ? `Kỳ ${period.period_number} đã chốt`
                   : `Khui kỳ ${period.period_number}`}
               </h2>
             </div>
+
             <p className="mt-1 text-sm text-muted-foreground">
-              {group.name} · {formatDate(period.scheduled_date)}
+              {group.name} ·{" "}
+              {formatDate(
+                period.scheduled_date,
+              )}
             </p>
           </div>
 
@@ -751,151 +1080,295 @@ function KhuiDialog({
           </Button>
         </div>
 
-        {hasConfirmedMoney && isCompleted(period.status) && (
+        {locked && (
           <Card className="mt-4 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
             <div className="flex gap-2">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+
               <p>
-                Kỳ này đã có xác nhận thu/chi. Bạn vẫn xem được phép tính nhưng
-                app khóa việc sửa kết quả để tránh làm lệch phiếu và cân đối.
+                Kỳ này đã có xác nhận thu/chi. Bạn vẫn xem được kết quả nhưng app khóa việc sửa để tránh làm lệch phiếu và cân đối.
               </p>
             </div>
           </Card>
         )}
 
-        <form className="mt-5 space-y-4" onSubmit={submit}>
+        <form
+          className="mt-5 space-y-5"
+          onSubmit={submit}
+        >
+          <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 sm:grid-cols-3">
+            <ConfigValue
+              label="Mệnh giá"
+              value={formatVND(
+                group.contribution_amount,
+              )}
+            />
+
+            <ConfigValue
+              label="Bước thăm"
+              value={formatVND(
+                bidStep,
+              )}
+              locked
+            />
+
+            <ConfigValue
+              label="Tiền thảo"
+              value={formatVND(
+                fee,
+              )}
+              locked
+            />
+          </div>
+
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Chân hốt
+
             <select
               required
-              disabled={hasConfirmedMoney && isCompleted(period.status)}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              disabled={locked}
+              className="h-11 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-60"
               value={winnerShareId}
-              onChange={(event) => setWinnerShareId(event.target.value)}
-            >
-              <option value="">Chọn chân hốt</option>
-              {eligibleShares.map((share) => {
-                const member = membersById.get(share.member_id)
-                return (
-                  <option key={share.id} value={share.id}>
-                    Chân {share.share_number} —{" "}
-                    {member?.full_name ?? "Không rõ"}
-                    {member?.phone ? ` — ${member.phone}` : ""}
-                  </option>
+              onChange={(event) => {
+                setWinnerShareId(
+                  event.target.value,
                 )
-              })}
+                setPreviewReady(false)
+                setError("")
+              }}
+            >
+              <option value="">
+                Chọn chân hốt
+              </option>
+
+              {eligibleShares.map(
+                (share) => {
+                  const member =
+                    membersById.get(
+                      share.member_id,
+                    )
+
+                  return (
+                    <option
+                      key={share.id}
+                      value={share.id}
+                    >
+                      Chân{" "}
+                      {share.share_number} —{" "}
+                      {member?.full_name ??
+                        "Không rõ"}
+                      {member?.phone
+                        ? ` — ${member.phone}`
+                        : ""}
+                    </option>
+                  )
+                },
+              )}
             </select>
           </label>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
+          <div>
+            <p className="text-sm font-medium">
               Giá thăm
-              <div className="relative">
-                <Input
-                  inputMode="numeric"
-                  required
-                  disabled={hasConfirmedMoney && isCompleted(period.status)}
-                  value={bidAmount}
-                  onChange={(event) =>
-                    setBidAmount(formatMoneyInput(event.target.value))
-                  }
-                  className="pr-10"
-                />
-                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  đ
-                </span>
-              </div>
-              <span className="text-xs font-normal text-muted-foreground">
-                Tối thiểu {formatVND(group.minimum_bid_amount || 0)} · bước{" "}
-                {formatVND(group.bid_step_amount || 0)}
-              </span>
-            </label>
+            </p>
 
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Ngày giờ khui
-              <Input
-                type="datetime-local"
-                required
-                disabled={hasConfirmedMoney && isCompleted(period.status)}
-                value={openedAt}
-                onChange={(event) => setOpenedAt(event.target.value)}
-              />
-            </label>
+            <div className="mt-2 grid grid-cols-[52px_minmax(0,1fr)_52px] items-stretch gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12"
+                disabled={
+                  locked ||
+                  bidAmount <= minimumBid
+                }
+                onClick={() =>
+                  changeBid("down")
+                }
+                aria-label="Giảm giá thăm"
+              >
+                <Minus className="size-5" />
+              </Button>
+
+              <div className="flex h-12 items-center justify-center rounded-md border bg-background px-3 text-center text-lg font-bold tabular-nums">
+                {formatVND(bidAmount)}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12"
+                disabled={locked}
+                onClick={() =>
+                  changeBid("up")
+                }
+                aria-label="Tăng giá thăm"
+              >
+                <Plus className="size-5" />
+              </Button>
+            </div>
+
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Tối thiểu{" "}
+              {formatVND(
+                minimumBid,
+              )}{" "}
+              · mỗi lần tăng/giảm{" "}
+              {formatVND(
+                bidStep,
+              )}
+            </p>
           </div>
 
-          <Card className="p-4">
-            <p className="font-semibold">Xem trước phép tính kỳ này</p>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Ngày giờ khui
 
-            {!winnerShareId ? (
-              <p className="mt-3 text-sm text-muted-foreground">
-                Chọn chân hốt để xem số tiền.
+            <Input
+              type="datetime-local"
+              required
+              disabled={locked}
+              value={openedAt}
+              onChange={(event) =>
+                setOpenedAt(
+                  event.target.value,
+                )
+              }
+            />
+          </label>
+
+          {!completed && (
+            <Button
+              type="button"
+              variant={
+                previewReady
+                  ? "outline"
+                  : "secondary"
+              }
+              className="w-full"
+              onClick={
+                calculatePreview
+              }
+            >
+              {previewReady ? (
+                <>
+                  <CheckCircle2 className="size-4 text-emerald-600" />
+                  Đã tính thử
+                </>
+              ) : (
+                "Tính thử"
+              )}
+            </Button>
+          )}
+
+          {(previewReady || completed) && (
+            <Card className="p-4">
+              <p className="font-semibold">
+                Kết quả kỳ này
               </p>
-            ) : (
+
               <div className="mt-3 space-y-2 text-sm">
                 <CalcRow
                   label="Người hốt"
-                  value={winnerMember?.full_name ?? "Không rõ"}
+                  value={
+                    winnerMember?.full_name ??
+                    "Không rõ"
+                  }
                 />
+
                 <CalcRow
                   label="Chân sống đóng"
                   value={`${preview.livePayers} chân × ${formatVND(
                     preview.liveContribution,
                   )}`}
                 />
+
                 <CalcRow
-                  label="Chân chết đóng"
+                  label="Chân đã hốt đóng"
                   value={`${preview.deadPayers} chân × ${formatVND(
                     preview.contribution,
                   )}`}
                 />
+
                 <div className="border-t pt-2">
                   <CalcRow
-                    label="Tổng hốt hụi"
-                    value={formatVND(preview.grossHui)}
+                    label="Tổng hốt"
+                    value={formatVND(
+                      preview.grossHui,
+                    )}
                     strong
                   />
+
                   <CalcRow
                     label="Trừ tiền thảo"
-                    value={`- ${formatVND(preview.fee)}`}
+                    value={`− ${formatVND(
+                      fee,
+                    )}`}
                   />
                 </div>
+
                 <div className="border-t pt-2">
                   <CalcRow
-                    label="Chủ hụi phải giao"
-                    value={formatVND(preview.payout)}
+                    label="Chủ hụi giao"
+                    value={formatVND(
+                      preview.payout,
+                    )}
                     strong
+                    highlight
                   />
                 </div>
               </div>
-            )}
-          </Card>
+            </Card>
+          )}
 
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Ghi chú
+
             <textarea
-              disabled={hasConfirmedMoney && isCompleted(period.status)}
+              disabled={locked}
               className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
               value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Ghi chú nếu kỳ này có trường hợp đặc biệt..."
+              onChange={(event) =>
+                setNotes(
+                  event.target.value,
+                )
+              }
+              placeholder="Chỉ ghi khi kỳ này có trường hợp đặc biệt..."
             />
           </label>
 
           {error && (
-            <p className="text-sm text-destructive" role="alert">
+            <p
+              className="text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </p>
           )}
 
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+            >
               Đóng
             </Button>
 
-            {!(hasConfirmedMoney && isCompleted(period.status)) && (
-              <Button type="submit" disabled={saving}>
-                {saving && <LoaderCircle className="size-4 animate-spin" />}
-                {isCompleted(period.status) ? "Lưu chỉnh sửa" : "Chốt kỳ"}
+            {!locked && (
+              <Button
+                type="submit"
+                disabled={
+                  saving ||
+                  (!completed &&
+                    !previewReady)
+                }
+              >
+                {saving && (
+                  <LoaderCircle className="size-4 animate-spin" />
+                )}
+
+                {completed
+                  ? "Lưu chỉnh sửa"
+                  : "Chốt kỳ"}
               </Button>
             )}
           </div>
@@ -905,21 +1378,56 @@ function KhuiDialog({
   )
 }
 
+function ConfigValue({
+  label,
+  value,
+  locked = false,
+}: {
+  label: string
+  value: string
+  locked?: boolean
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+        <span>{label}</span>
+
+        {locked && (
+          <LockKeyhole className="size-3" />
+        )}
+      </div>
+
+      <p className="mt-1 truncate text-sm font-semibold tabular-nums">
+        {value}
+      </p>
+    </div>
+  )
+}
+
 function CalcRow({
   label,
   value,
   strong = false,
+  highlight = false,
 }: {
   label: string
   value: string
   strong?: boolean
+  highlight?: boolean
 }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <span className="text-muted-foreground">{label}</span>
+      <span className="text-muted-foreground">
+        {label}
+      </span>
+
       <span
-        className={`shrink-0 text-right ${
-          strong ? "font-bold" : "font-medium"
+        className={`shrink-0 text-right tabular-nums ${
+          highlight
+            ? "text-lg font-bold text-primary"
+            : strong
+              ? "font-bold"
+              : "font-medium"
         }`}
       >
         {value}
