@@ -440,36 +440,68 @@ async function createReceiptJpeg(
   settings: SettingsRow,
 ) {
   const width = 1080
-  const margin = 58
+  const margin = 54
   const contentWidth = width - margin * 2
 
   /*
-   * Màu Phiếu v2.
-   * Tạm dùng một mini visual system riêng cho Phiếu.
-   * Sau này khi chốt toàn app mình sẽ đồng bộ lại toàn bộ token.
+   * Visual được đối chiếu theo prototype Lovable:
+   * - Be Vietnam Pro
+   * - nền xanh-xám rất nhẹ
+   * - foreground navy/xám đậm
+   * - border mỏng
+   * - màu trạng thái tiết chế
    */
   const COLORS = {
-    navy: "#0f2a56",
-    text: "#172033",
-    muted: "#6b7280",
-    border: "#dbe1ea",
-    soft: "#f7f9fc",
+    background: "#fbfcfe",
+    white: "#ffffff",
 
-    collect: "#18794e",
-    collectSoft: "#f0f8f3",
-    collectBorder: "#cfe6d7",
+    foreground: "#273247",
+    strong: "#111c30",
+    navy: "#253553",
+    muted: "#738096",
 
-    pay: "#c93a3a",
-    paySoft: "#fdf3f3",
-    payBorder: "#f1cccc",
+    border: "#dce3ed",
+    borderStrong: "#cfd8e5",
 
-    live: "#18794e",
-    liveSoft: "#f2f8f4",
+    secondary: "#eef3f9",
+    mutedBg: "#f4f6f9",
 
-    dead: "#b54747",
-    deadSoft: "#fbf3f3",
+    collect: "#267a53",
+    collectSoft: "#eef8f2",
+    collectBorder: "#d4e9dc",
 
-    blueSoft: "#f2f6fc",
+    pay: "#b85050",
+    paySoft: "#fbf1f1",
+    payBorder: "#eed3d3",
+
+    live: "#34785c",
+    liveSoft: "#f0f7f3",
+
+    dead: "#9b5b5b",
+    deadSoft: "#faf2f2",
+  }
+
+  /*
+   * Chờ font trên trang load xong.
+   *
+   * Nếu sau này app chính đổi sang Be Vietnam Pro,
+   * JPG sẽ dùng ngay font đó.
+   *
+   * Hiện tại repo thật đang dùng Inter nên fallback Inter.
+   */
+  await document.fonts.ready
+
+  const bodyFont =
+    getComputedStyle(document.body).fontFamily
+
+  const fontFamily =
+    `'Be Vietnam Pro', ${bodyFont || "'Inter', system-ui, sans-serif"}`
+
+  function font(
+    weight: number,
+    size: number,
+  ) {
+    return `${weight} ${size}px ${fontFamily}`
   }
 
   const qrUrl = vietQrUrl(
@@ -479,8 +511,7 @@ async function createReceiptJpeg(
   )
 
   /*
-   * Tải QR trước để biết đúng tỷ lệ ảnh.
-   * Không ép ảnh QR thành hình vuông nữa.
+   * Load QR trước để lấy đúng tỷ lệ ảnh VietQR.
    */
   let qrImage: HTMLImageElement | null = null
 
@@ -495,18 +526,9 @@ async function createReceiptJpeg(
     }
   }
 
-  const qrWidth = 390
-
-  const qrHeight = qrImage
-    ? qrWidth *
-      (qrImage.naturalHeight /
-        qrImage.naturalWidth)
-    : 0
-
   /*
-   * Số dòng thực tế của từng dây.
-   * Dùng số dòng thật để tính chiều cao card,
-   * không còn hard-code 210/275 nên phiếu chi không vỡ.
+   * Tính chiều cao từng dây dựa trên số dòng thật.
+   * Không còn hard-code chiều cao khiến phiếu chi bị vỡ.
    */
   const detailLayouts =
     receipt.lines.map((line) => {
@@ -517,7 +539,7 @@ async function createReceiptJpeg(
       }
 
       if (line.huiAmount > 0) {
-        moneyRows += 1
+        moneyRows += 1 // Hốt hụi
 
         if (line.feeAmount > 0) {
           moneyRows += 1
@@ -526,30 +548,31 @@ async function createReceiptJpeg(
         moneyRows += 1 // Thực nhận
       }
 
-      const rightContentHeight =
-        moneyRows * 48 + 16
+      const moneyHeight =
+        moneyRows * 55 +
+        (line.huiAmount > 0 ? 30 : 0)
 
-      const statHeight = 142
-
-      const bodyHeight = Math.max(
-        statHeight,
-        rightContentHeight,
-      )
+      const statsHeight = 150
 
       return {
-        moneyRows,
-        height: 104 + bodyHeight + 32,
+        height:
+          112 +
+          Math.max(
+            statsHeight,
+            moneyHeight,
+          ) +
+          32,
       }
     })
 
-  const detailTotalHeight =
+  const detailsHeight =
     detailLayouts.reduce(
       (sum, item) =>
         sum + item.height + 20,
       0,
     )
 
-  const totalRows = [
+  const summaryRows = [
     receipt.totalPay > 0,
     receipt.totalHuiAmount > 0,
     receipt.totalFee > 0,
@@ -557,42 +580,52 @@ async function createReceiptJpeg(
     receipt.paidAmount > 0,
   ].filter(Boolean).length
 
-  const totalSectionHeight =
-    80 +
-    totalRows * 50 +
-    (receipt.totalReceive > 0
-      ? 88
-      : 20)
+  const summaryHighlight =
+    receipt.totalReceive > 0
+
+  const summaryHeight =
+    60 +
+    summaryRows * 56 +
+    (summaryHighlight ? 92 : 16)
+
+  const qrWidth = 400
+
+  const qrHeight = qrImage
+    ? qrWidth *
+      (qrImage.naturalHeight /
+        qrImage.naturalWidth)
+    : 0
 
   const qrSectionHeight = qrImage
-    ? 120 + qrHeight + 85
+    ? 110 + qrHeight + 82
     : 0
 
   /*
-   * Các khối cố định:
-   * header 165
-   * action 175
-   * owner 150
-   * section title 70
-   * footer padding
+   * Header được tăng khoảng thở phía trên.
    */
-  const height =
-    165 +
-    175 +
-    150 +
-    70 +
-    detailTotalHeight +
-    totalSectionHeight +
-    qrSectionHeight +
-    90
+  const canvasHeight =
+    205 + // title
+    175 + // amount
+    154 + // owner
+    74 + // Chi tiết hụi
+    detailsHeight +
+    76 + // Tổng kết title
+    summaryHeight +
+    (qrImage
+      ? 38 + qrSectionHeight
+      : 0) +
+    78
 
   const canvas =
     document.createElement("canvas")
 
   canvas.width = width
-  canvas.height = Math.ceil(height)
+  canvas.height = Math.ceil(
+    canvasHeight,
+  )
 
-  const ctx = canvas.getContext("2d")
+  const ctx =
+    canvas.getContext("2d")
 
   if (!ctx) {
     throw new Error(
@@ -600,7 +633,9 @@ async function createReceiptJpeg(
     )
   }
 
-  ctx.fillStyle = "#ffffff"
+  ctx.fillStyle =
+    COLORS.background
+
   ctx.fillRect(
     0,
     0,
@@ -610,21 +645,64 @@ async function createReceiptJpeg(
 
   ctx.lineWidth = 2
 
-  /*
-   * Các helper chỉ dùng trong JPG.
-   */
-  function drawPersonGlyph(
-    centerX: number,
-    centerY: number,
+  function drawCard(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    fill = COLORS.white,
+    stroke = COLORS.border,
+    radius = 16,
+  ) {
+    ctx.fillStyle = fill
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 2
+
+    roundedRect(
+      ctx,
+      x,
+      y,
+      w,
+      h,
+      radius,
+    )
+
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  function drawDivider(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ) {
+    ctx.strokeStyle =
+      COLORS.border
+
+    ctx.lineWidth = 2
+
+    drawLine(
+      ctx,
+      x1,
+      y1,
+      x2,
+      y2,
+    )
+  }
+
+  function drawPersonIcon(
+    cx: number,
+    cy: number,
     color: string,
   ) {
     ctx.fillStyle = color
 
     ctx.beginPath()
     ctx.arc(
-      centerX,
-      centerY - 8,
-      8,
+      cx,
+      cy - 8,
+      9,
       0,
       Math.PI * 2,
     )
@@ -632,27 +710,27 @@ async function createReceiptJpeg(
 
     ctx.beginPath()
     ctx.arc(
-      centerX,
-      centerY + 12,
-      15,
+      cx,
+      cy + 15,
+      17,
       Math.PI,
       Math.PI * 2,
     )
     ctx.lineTo(
-      centerX + 15,
-      centerY + 17,
+      cx + 17,
+      cy + 21,
     )
     ctx.lineTo(
-      centerX - 15,
-      centerY + 17,
+      cx - 17,
+      cy + 21,
     )
     ctx.closePath()
     ctx.fill()
   }
 
-  function drawWalletGlyph(
-    centerX: number,
-    centerY: number,
+  function drawWalletIcon(
+    cx: number,
+    cy: number,
     color: string,
   ) {
     ctx.strokeStyle = color
@@ -661,28 +739,30 @@ async function createReceiptJpeg(
 
     roundedRect(
       ctx,
-      centerX - 23,
-      centerY - 18,
-      46,
-      36,
+      cx - 24,
+      cy - 18,
+      48,
+      38,
       8,
     )
+
     ctx.stroke()
 
     roundedRect(
       ctx,
-      centerX + 5,
-      centerY - 7,
-      24,
-      16,
+      cx + 5,
+      cy - 7,
+      25,
+      17,
       5,
     )
+
     ctx.stroke()
 
     ctx.beginPath()
     ctx.arc(
-      centerX + 14,
-      centerY + 1,
+      cx + 15,
+      cy + 1,
       3,
       0,
       Math.PI * 2,
@@ -690,49 +770,64 @@ async function createReceiptJpeg(
     ctx.fill()
   }
 
-  function drawInfoCardRow(
+  function drawPhoneIcon(
+    cx: number,
+    cy: number,
+  ) {
+    ctx.fillStyle =
+      COLORS.navy
+
+    ctx.textAlign = "center"
+    ctx.font = font(700, 29)
+
+    ctx.fillText(
+      "☎",
+      cx,
+      cy + 10,
+    )
+  }
+
+  function drawOwnerRow(
     label: string,
     value: string,
     rowY: number,
-    icon: "person" | "phone",
+    type: "person" | "phone",
   ) {
-    const iconCenterX = margin + 34
-    const iconCenterY = rowY - 8
+    const cx = margin + 35
+    const cy = rowY - 9
 
-    ctx.fillStyle = COLORS.blueSoft
+    ctx.fillStyle =
+      COLORS.secondary
 
     ctx.beginPath()
     ctx.arc(
-      iconCenterX,
-      iconCenterY,
+      cx,
+      cy,
       25,
       0,
       Math.PI * 2,
     )
+
     ctx.fill()
 
-    if (icon === "person") {
-      drawPersonGlyph(
-        iconCenterX,
-        iconCenterY,
+    if (type === "person") {
+      drawPersonIcon(
+        cx,
+        cy,
         COLORS.navy,
       )
     } else {
-      ctx.fillStyle = COLORS.navy
-      ctx.textAlign = "center"
-      ctx.font =
-        "700 28px Arial, sans-serif"
-      ctx.fillText(
-        "☎",
-        iconCenterX,
-        iconCenterY + 9,
+      drawPhoneIcon(
+        cx,
+        cy,
       )
     }
 
     ctx.textAlign = "left"
-    ctx.fillStyle = COLORS.muted
-    ctx.font =
-      "26px Arial, sans-serif"
+    ctx.fillStyle =
+      COLORS.muted
+
+    ctx.font = font(400, 29)
 
     ctx.fillText(
       label,
@@ -741,9 +836,10 @@ async function createReceiptJpeg(
     )
 
     ctx.textAlign = "right"
-    ctx.fillStyle = COLORS.navy
-    ctx.font =
-      "700 27px Arial, sans-serif"
+    ctx.fillStyle =
+      COLORS.strong
+
+    ctx.font = font(700, 29)
 
     ctx.fillText(
       value,
@@ -752,12 +848,67 @@ async function createReceiptJpeg(
     )
   }
 
+  function drawStatTile(
+    label: string,
+    value: number,
+    x: number,
+    y: number,
+    w: number,
+    kind: "live" | "dead",
+  ) {
+    const live =
+      kind === "live"
+
+    const color = live
+      ? COLORS.live
+      : COLORS.dead
+
+    drawCard(
+      x,
+      y,
+      w,
+      138,
+      live
+        ? COLORS.liveSoft
+        : COLORS.deadSoft,
+      live
+        ? COLORS.collectBorder
+        : COLORS.payBorder,
+      13,
+    )
+
+    drawPersonIcon(
+      x + 34,
+      y + 43,
+      color,
+    )
+
+    ctx.textAlign = "left"
+    ctx.fillStyle = color
+
+    ctx.font = font(600, 24)
+
+    ctx.fillText(
+      label,
+      x + 65,
+      y + 49,
+    )
+
+    ctx.font = font(800, 44)
+
+    ctx.fillText(
+      String(value),
+      x + 65,
+      y + 104,
+    )
+  }
+
   function drawMoneyRow(
     label: string,
     value: string,
     x: number,
-    rowY: number,
-    rowWidth: number,
+    y: number,
+    w: number,
     options?: {
       negative?: boolean
       strong?: boolean
@@ -765,111 +916,58 @@ async function createReceiptJpeg(
   ) {
     ctx.textAlign = "left"
 
-    ctx.fillStyle = options?.strong
-      ? COLORS.navy
-      : COLORS.muted
+    ctx.fillStyle =
+      options?.strong
+        ? COLORS.strong
+        : COLORS.muted
 
-    ctx.font = options?.strong
-      ? "700 27px Arial, sans-serif"
-      : "25px Arial, sans-serif"
+    ctx.font =
+      options?.strong
+        ? font(700, 30)
+        : font(400, 29)
 
     ctx.fillText(
       label,
       x,
-      rowY,
+      y,
     )
 
     ctx.textAlign = "right"
 
-    ctx.fillStyle = options?.negative
-      ? COLORS.pay
-      : COLORS.navy
+    ctx.fillStyle =
+      options?.negative
+        ? COLORS.pay
+        : COLORS.strong
 
-    ctx.font = options?.strong
-      ? "800 28px Arial, sans-serif"
-      : "700 25px Arial, sans-serif"
+    ctx.font =
+      options?.strong
+        ? font(800, 31)
+        : font(700, 29)
 
     ctx.fillText(
       value,
-      x + rowWidth,
-      rowY,
+      x + w,
+      y,
     )
   }
-
-  function drawStatTile(
-    label: string,
-    value: number,
-    x: number,
-    tileY: number,
-    tileWidth: number,
-    type: "live" | "dead",
-  ) {
-    const isLive = type === "live"
-
-    const textColor = isLive
-      ? COLORS.live
-      : COLORS.dead
-
-    const background = isLive
-      ? COLORS.liveSoft
-      : COLORS.deadSoft
-
-    const border = isLive
-      ? COLORS.collectBorder
-      : COLORS.payBorder
-
-    ctx.fillStyle = background
-    ctx.strokeStyle = border
-    ctx.lineWidth = 2
-
-    roundedRect(
-      ctx,
-      x,
-      tileY,
-      tileWidth,
-      130,
-      16,
-    )
-
-    ctx.fill()
-    ctx.stroke()
-
-    drawPersonGlyph(
-      x + 35,
-      tileY + 42,
-      textColor,
-    )
-
-    ctx.fillStyle = textColor
-    ctx.textAlign = "left"
-    ctx.font =
-      "600 21px Arial, sans-serif"
-
-    ctx.fillText(
-      label,
-      x + 64,
-      tileY + 47,
-    )
-
-    ctx.font =
-      "800 38px Arial, sans-serif"
-
-    ctx.fillText(
-      String(value),
-      x + 64,
-      tileY + 93,
-    )
-  }
-
-  let y = 58
 
   /*
+   * ---------------------------------------------------------
    * HEADER
+   * ---------------------------------------------------------
    */
-  ctx.fillStyle = COLORS.navy
+  let y = 92
+
   ctx.textAlign = "center"
-  ctx.font =
-    "800 45px Arial, sans-serif"
+
+  ctx.fillStyle =
+    COLORS.navy
+
+  /*
+   * Lovable dùng heading uppercase,
+   * tracking rộng và không quá lớn.
+   */
+  ctx.font = font(800, 47)
 
   ctx.fillText(
     "PHIẾU HỤI",
@@ -877,10 +975,12 @@ async function createReceiptJpeg(
     y,
   )
 
-  y += 50
+  y += 57
 
-  ctx.font =
-    "700 33px Arial, sans-serif"
+  ctx.fillStyle =
+    COLORS.strong
+
+  ctx.font = font(700, 38)
 
   ctx.fillText(
     receipt.member.full_name,
@@ -888,11 +988,12 @@ async function createReceiptJpeg(
     y,
   )
 
-  y += 39
+  y += 43
 
-  ctx.fillStyle = COLORS.muted
-  ctx.font =
-    "24px Arial, sans-serif"
+  ctx.fillStyle =
+    COLORS.muted
+
+  ctx.font = font(400, 27)
 
   ctx.fillText(
     formatDate(date),
@@ -901,206 +1002,245 @@ async function createReceiptJpeg(
   )
 
   /*
-   * ACTION CARD
+   * ---------------------------------------------------------
+   * CẦN THU / CẦN CHI
+   * ---------------------------------------------------------
    */
-  y += 35
+  y += 38
 
-  const isCollect =
-    receipt.direction === "collect"
+  const cancelled =
+    receipt.status ===
+    "cancelled"
 
-  const isPay =
-    receipt.direction === "pay"
-
-  const isCancelled =
-    receipt.status === "cancelled"
-
-  const isFinished =
-    !isCancelled &&
+  const finished =
+    !cancelled &&
     receipt.remainingAmount <= 0
 
-  let actionLabel = "ĐÃ CÂN BẰNG"
-  let actionAmount =
-    formatVND(receipt.remainingAmount)
+  const collect =
+    !cancelled &&
+    !finished &&
+    receipt.direction ===
+      "collect"
 
-  let actionDescription = ""
-  let actionColor = COLORS.navy
-  let actionBackground = COLORS.blueSoft
-  let actionBorder = COLORS.border
+  const pay =
+    !cancelled &&
+    !finished &&
+    receipt.direction === "pay"
 
-  if (isCancelled) {
-    actionLabel = "PHIẾU ĐÃ HỦY"
-    actionAmount = "—"
-  } else if (isFinished) {
-    actionLabel = "ĐÃ THANH TOÁN ĐỦ"
-    actionAmount = formatVND(0)
-  } else if (isCollect) {
-    actionLabel = "CẦN THU"
-    actionAmount = `+${formatVND(
+  let headline =
+    "ĐÃ CÂN BẰNG"
+
+  let amountText =
+    formatVND(
       receipt.remainingAmount,
-    )}`
-    actionDescription =
+    )
+
+  let description = ""
+
+  let actionColor =
+    COLORS.navy
+
+  let actionBg =
+    COLORS.secondary
+
+  let actionBorder =
+    COLORS.border
+
+  if (cancelled) {
+    headline =
+      "PHIẾU ĐÃ HỦY"
+
+    amountText = "—"
+  } else if (finished) {
+    headline =
+      "ĐÃ THANH TOÁN ĐỦ"
+
+    amountText =
+      formatVND(0)
+  } else if (collect) {
+    headline = "CẦN THU"
+
+    amountText =
+      `+${formatVND(
+        receipt.remainingAmount,
+      )}`
+
+    description =
       "Hụi viên đóng cho chủ hụi"
-    actionColor = COLORS.collect
-    actionBackground =
+
+    actionColor =
+      COLORS.collect
+
+    actionBg =
       COLORS.collectSoft
+
     actionBorder =
       COLORS.collectBorder
-  } else if (isPay) {
-    actionLabel = "CẦN CHI"
-    actionAmount = `−${formatVND(
-      receipt.remainingAmount,
-    )}`
-    actionDescription =
+  } else if (pay) {
+    headline = "CẦN CHI"
+
+    amountText =
+      `−${formatVND(
+        receipt.remainingAmount,
+      )}`
+
+    description =
       "Chủ hụi giao cho hụi viên"
-    actionColor = COLORS.pay
-    actionBackground =
+
+    actionColor =
+      COLORS.pay
+
+    actionBg =
       COLORS.paySoft
+
     actionBorder =
       COLORS.payBorder
   }
 
-  ctx.fillStyle = actionBackground
-  ctx.strokeStyle = actionBorder
-  ctx.lineWidth = 2
+  const actionY = y
 
-  roundedRect(
-    ctx,
+  drawCard(
     margin,
-    y,
+    actionY,
     contentWidth,
-    145,
-    20,
+    148,
+    actionBg,
+    actionBorder,
+    17,
   )
 
-  ctx.fill()
-  ctx.stroke()
+  const iconX = margin + 92
+  const iconY =
+    actionY + 74
 
-  const walletCircleX = margin + 94
-  const walletCircleY = y + 72
-
-  ctx.fillStyle = isCollect
-    ? "#e4f2e9"
-    : isPay
-      ? "#f8dddd"
-      : COLORS.blueSoft
+  ctx.fillStyle = collect
+    ? "#e2f1e7"
+    : pay
+      ? "#f5dddd"
+      : COLORS.mutedBg
 
   ctx.beginPath()
+
   ctx.arc(
-    walletCircleX,
-    walletCircleY,
-    47,
+    iconX,
+    iconY,
+    48,
     0,
     Math.PI * 2,
   )
+
   ctx.fill()
 
-  drawWalletGlyph(
-    walletCircleX,
-    walletCircleY,
+  drawWalletIcon(
+    iconX,
+    iconY,
     actionColor,
   )
 
-  ctx.strokeStyle = actionBorder
+  ctx.strokeStyle =
+    actionBorder
 
   drawLine(
     ctx,
-    margin + 178,
-    y + 25,
-    margin + 178,
-    y + 120,
+    margin + 180,
+    actionY + 24,
+    margin + 180,
+    actionY + 124,
   )
 
-  const actionCenterX =
-    margin + 178 +
-    (contentWidth - 178) / 2
+  const actionCenter =
+    margin +
+    180 +
+    (contentWidth - 180) /
+      2
 
   ctx.textAlign = "center"
-  ctx.fillStyle = actionColor
-  ctx.font =
-    "700 26px Arial, sans-serif"
+
+  ctx.fillStyle =
+    actionColor
+
+  ctx.font = font(700, 28)
 
   ctx.fillText(
-    actionLabel,
-    actionCenterX,
-    y + 42,
+    headline,
+    actionCenter,
+    actionY + 42,
   )
 
-  ctx.font =
-    "800 47px Arial, sans-serif"
+  ctx.font = font(800, 50)
 
   ctx.fillText(
-    actionAmount,
-    actionCenterX,
-    y + 94,
+    amountText,
+    actionCenter,
+    actionY + 96,
   )
 
-  if (actionDescription) {
-    ctx.fillStyle = COLORS.muted
-    ctx.font =
-      "23px Arial, sans-serif"
+  if (description) {
+    ctx.fillStyle =
+      COLORS.muted
+
+    ctx.font = font(400, 25)
 
     ctx.fillText(
-      actionDescription,
-      actionCenterX,
-      y + 125,
+      description,
+      actionCenter,
+      actionY + 126,
     )
   }
 
   /*
-   * OWNER INFO
+   * ---------------------------------------------------------
+   * CHỦ HỤI
+   * ---------------------------------------------------------
    */
-  y += 170
+  y = actionY + 174
 
-  ctx.fillStyle = "#ffffff"
-  ctx.strokeStyle = COLORS.border
-
-  roundedRect(
-    ctx,
+  drawCard(
     margin,
     y,
     contentWidth,
-    126,
-    17,
+    132,
+    COLORS.white,
+    COLORS.border,
+    15,
   )
 
-  ctx.fill()
-  ctx.stroke()
-
-  drawInfoCardRow(
+  drawOwnerRow(
     "Chủ hụi",
     settings.owner_name ||
       "Chưa khai báo",
-    y + 45,
+    y + 47,
     "person",
   )
 
-  ctx.strokeStyle = COLORS.border
-
-  drawLine(
-    ctx,
-    margin + 22,
-    y + 63,
-    width - margin - 22,
-    y + 63,
+  drawDivider(
+    margin + 20,
+    y + 66,
+    width - margin - 20,
+    y + 66,
   )
 
-  drawInfoCardRow(
+  drawOwnerRow(
     "SĐT",
     settings.owner_phone ||
       "Chưa khai báo",
-    y + 103,
+    y + 108,
     "phone",
   )
 
   /*
-   * SECTION TITLE
+   * ---------------------------------------------------------
+   * CHI TIẾT HỤI
+   * ---------------------------------------------------------
    */
-  y += 168
+  y += 178
 
-  ctx.fillStyle = COLORS.navy
   ctx.textAlign = "left"
-  ctx.font =
-    "800 31px Arial, sans-serif"
+
+  ctx.fillStyle =
+    COLORS.strong
+
+  ctx.font = font(800, 35)
 
   ctx.fillText(
     "Chi tiết hụi",
@@ -1108,136 +1248,162 @@ async function createReceiptJpeg(
     y,
   )
 
-  y += 28
+  y += 27
 
-  /*
-   * MỖI DÂY HỤI
-   */
   for (
     let index = 0;
     index < receipt.lines.length;
     index++
   ) {
-    const line = receipt.lines[index]
+    const line =
+      receipt.lines[index]
+
     const layout =
       detailLayouts[index]
 
-    y += 16
+    y += 18
 
-    ctx.fillStyle = "#ffffff"
-    ctx.strokeStyle = COLORS.border
-    ctx.lineWidth = 2
+    const cardY = y
 
-    roundedRect(
-      ctx,
+    drawCard(
       margin,
-      y,
+      cardY,
       contentWidth,
       layout.height,
-      18,
+      COLORS.white,
+      COLORS.border,
+      15,
     )
 
-    ctx.fill()
-    ctx.stroke()
-
     /*
-     * Navy accent rất mỏng,
-     * không làm phiếu quá màu mè.
+     * Header dây kiểu Lovable:
+     * nền muted thay vì đường navy dày.
      */
-    ctx.fillStyle = COLORS.navy
+    ctx.fillStyle =
+      COLORS.secondary
 
     roundedRect(
       ctx,
-      margin,
-      y,
-      contentWidth,
-      7,
-      4,
+      margin + 2,
+      cardY + 2,
+      contentWidth - 4,
+      88,
+      13,
     )
 
     ctx.fill()
 
-    const headerY = y + 51
+    /*
+     * Che phần bo dưới để header
+     * trông giống một band phẳng.
+     */
+    ctx.fillRect(
+      margin + 2,
+      cardY + 54,
+      contentWidth - 4,
+      36,
+    )
 
     ctx.textAlign = "left"
-    ctx.fillStyle = COLORS.navy
-    ctx.font =
-      "800 26px Arial, sans-serif"
 
-    const groupTitle = line.groupCode
-      ? `${line.groupCode} · ${line.groupName}`
-      : line.groupName
+    ctx.fillStyle =
+      COLORS.strong
+
+    ctx.font = font(800, 29)
+
+    const groupTitle =
+      line.groupCode
+        ? `${line.groupCode} · ${line.groupName}`
+        : line.groupName
 
     ctx.fillText(
       groupTitle,
       margin + 24,
-      headerY,
+      cardY + 40,
     )
 
     ctx.textAlign = "right"
 
+    ctx.font = font(700, 27)
+
     ctx.fillText(
       `Kỳ ${line.periodNumber}/${line.totalPeriods}`,
       width - margin - 24,
-      headerY,
+      cardY + 40,
     )
 
-    ctx.strokeStyle = COLORS.border
+    ctx.textAlign = "left"
 
-    drawLine(
-      ctx,
-      margin + 22,
-      y + 78,
-      width - margin - 22,
-      y + 78,
+    ctx.fillStyle =
+      COLORS.muted
+
+    ctx.font = font(400, 23)
+
+    ctx.fillText(
+      `Giá thăm ${formatVND(
+        line.bidAmount,
+      )}`,
+      margin + 24,
+      cardY + 72,
     )
 
-    const bodyY = y + 101
+    const bodyY =
+      cardY + 113
 
     /*
-     * Trái: 2 tile Chân sống/Chân chết.
+     * Hai ô Chân sống / Chân chết.
      */
-    const statsAreaWidth = 390
-    const tileGap = 14
-    const tileWidth =
-      (statsAreaWidth - tileGap) / 2
+    const statsWidth = 394
+
+    const gap = 14
+
+    const statWidth =
+      (statsWidth - gap) / 2
 
     drawStatTile(
       "Chân sống",
       line.liveShares,
       margin + 24,
       bodyY,
-      tileWidth,
+      statWidth,
       "live",
     )
 
     drawStatTile(
       "Chân chết",
       line.deadShares,
-      margin + 24 + tileWidth + tileGap,
+      margin +
+        24 +
+        statWidth +
+        gap,
       bodyY,
-      tileWidth,
+      statWidth,
       "dead",
     )
 
     const dividerX =
-      margin + 24 + statsAreaWidth + 23
+      margin +
+      24 +
+      statsWidth +
+      24
 
-    ctx.strokeStyle = COLORS.border
-
-    drawLine(
-      ctx,
+    drawDivider(
       dividerX,
       bodyY,
       dividerX,
-      y + layout.height - 24,
+      cardY +
+        layout.height -
+        25,
     )
 
     /*
-     * Phải: tiền của dây.
-     * Không còn dòng Chân sống/chết 1/1.
+     * Cột tiền.
+     *
+     * Giá thăm đã nằm ở header dây,
+     * nên không lặp lại ở cột này.
      */
-    const moneyX = dividerX + 28
+    const moneyX =
+      dividerX + 29
 
     const moneyWidth =
       width -
@@ -1245,42 +1411,39 @@ async function createReceiptJpeg(
       24 -
       moneyX
 
-    let moneyY = bodyY + 32
-
-    drawMoneyRow(
-      "Giá thăm",
-      formatVND(line.bidAmount),
-      moneyX,
-      moneyY,
-      moneyWidth,
-    )
+    let moneyY =
+      bodyY + 35
 
     if (line.payAmount > 0) {
-      moneyY += 48
-
       drawMoneyRow(
         "Tiền đóng",
-        formatVND(line.payAmount),
+        formatVND(
+          line.payAmount,
+        ),
         moneyX,
         moneyY,
         moneyWidth,
       )
+
+      moneyY += 55
     }
 
     if (line.huiAmount > 0) {
-      moneyY += 48
-
       drawMoneyRow(
         "Hốt hụi",
-        formatVND(line.huiAmount),
+        formatVND(
+          line.huiAmount,
+        ),
         moneyX,
         moneyY,
         moneyWidth,
       )
 
-      if (line.feeAmount > 0) {
-        moneyY += 48
+      moneyY += 55
 
+      if (
+        line.feeAmount > 0
+      ) {
         drawMoneyRow(
           "Tiền thảo",
           `−${formatVND(
@@ -1293,21 +1456,19 @@ async function createReceiptJpeg(
             negative: true,
           },
         )
+
+        moneyY += 24
       }
 
-      moneyY += 18
-
-      ctx.strokeStyle = COLORS.border
-
-      drawLine(
-        ctx,
+      drawDivider(
         moneyX,
         moneyY,
-        moneyX + moneyWidth,
+        moneyX +
+          moneyWidth,
         moneyY,
       )
 
-      moneyY += 41
+      moneyY += 43
 
       drawMoneyRow(
         "Thực nhận",
@@ -1323,18 +1484,25 @@ async function createReceiptJpeg(
       )
     }
 
-    y += layout.height + 4
+    y =
+      cardY +
+      layout.height +
+      3
   }
 
   /*
+   * ---------------------------------------------------------
    * TỔNG KẾT
+   * ---------------------------------------------------------
    */
-  y += 34
+  y += 42
 
-  ctx.fillStyle = COLORS.navy
   ctx.textAlign = "left"
-  ctx.font =
-    "800 31px Arial, sans-serif"
+
+  ctx.fillStyle =
+    COLORS.strong
+
+  ctx.font = font(800, 35)
 
   ctx.fillText(
     "Tổng kết",
@@ -1342,54 +1510,52 @@ async function createReceiptJpeg(
     y,
   )
 
-  y += 25
+  y += 26
 
-  const totalCardY = y
+  const summaryY = y
 
-  let totalCardHeight =
-    totalSectionHeight - 20
-
-  ctx.fillStyle = COLORS.soft
-  ctx.strokeStyle = COLORS.border
-
-  roundedRect(
-    ctx,
+  drawCard(
     margin,
-    totalCardY,
+    summaryY,
     contentWidth,
-    totalCardHeight,
-    17,
+    summaryHeight,
+    COLORS.white,
+    COLORS.border,
+    15,
   )
 
-  ctx.fill()
-  ctx.stroke()
-
-  let totalY = totalCardY + 45
+  let rowY =
+    summaryY + 48
 
   if (receipt.totalPay > 0) {
     drawMoneyRow(
       "Tổng tiền đóng hụi",
-      formatVND(receipt.totalPay),
-      margin + 25,
-      totalY,
-      contentWidth - 50,
+      formatVND(
+        receipt.totalPay,
+      ),
+      margin + 24,
+      rowY,
+      contentWidth - 48,
     )
 
-    totalY += 50
+    rowY += 56
   }
 
-  if (receipt.totalHuiAmount > 0) {
+  if (
+    receipt.totalHuiAmount >
+    0
+  ) {
     drawMoneyRow(
       "Tổng hốt hụi",
       formatVND(
         receipt.totalHuiAmount,
       ),
-      margin + 25,
-      totalY,
-      contentWidth - 50,
+      margin + 24,
+      rowY,
+      contentWidth - 48,
     )
 
-    totalY += 50
+    rowY += 56
   }
 
   if (receipt.totalFee > 0) {
@@ -1398,36 +1564,40 @@ async function createReceiptJpeg(
       `−${formatVND(
         receipt.totalFee,
       )}`,
-      margin + 25,
-      totalY,
-      contentWidth - 50,
+      margin + 24,
+      rowY,
+      contentWidth - 48,
       {
         negative: true,
       },
     )
 
-    totalY += 50
+    rowY += 56
   }
 
-  if (receipt.settlementAmount !== 0) {
-    const adjustmentPrefix =
-      receipt.settlementAmount > 0
+  if (
+    receipt.settlementAmount !==
+    0
+  ) {
+    const sign =
+      receipt.settlementAmount >
+      0
         ? "+"
         : "−"
 
     drawMoneyRow(
       "Tất toán / điều chỉnh",
-      `${adjustmentPrefix}${formatVND(
+      `${sign}${formatVND(
         Math.abs(
           receipt.settlementAmount,
         ),
       )}`,
-      margin + 25,
-      totalY,
-      contentWidth - 50,
+      margin + 24,
+      rowY,
+      contentWidth - 48,
     )
 
-    totalY += 50
+    rowY += 56
   }
 
   if (receipt.paidAmount > 0) {
@@ -1436,110 +1606,89 @@ async function createReceiptJpeg(
       formatVND(
         receipt.paidAmount,
       ),
-      margin + 25,
-      totalY,
-      contentWidth - 50,
+      margin + 24,
+      rowY,
+      contentWidth - 48,
     )
 
-    totalY += 50
+    rowY += 56
   }
 
-  /*
-   * Nếu có hốt hụi, làm nổi bật
-   * tổng thực nhận sau tiền thảo.
-   *
-   * Đây KHÔNG phải số ròng CẦN CHI ở đầu phiếu.
-   */
   if (receipt.totalReceive > 0) {
-    totalY += 5
+    const highlightY =
+      summaryY +
+      summaryHeight -
+      78
 
-    ctx.fillStyle = COLORS.blueSoft
-    ctx.strokeStyle = "#d4e0f3"
-
-    roundedRect(
-      ctx,
+    drawCard(
       margin + 18,
-      totalY,
+      highlightY,
       contentWidth - 36,
-      66,
-      13,
+      62,
+      COLORS.secondary,
+      COLORS.border,
+      10,
     )
 
-    ctx.fill()
-    ctx.stroke()
-
-    ctx.textAlign = "left"
-    ctx.fillStyle = COLORS.navy
-    ctx.font =
-      "800 25px Arial, sans-serif"
-
-    ctx.fillText(
+    drawMoneyRow(
       "Thực nhận sau tiền thảo",
-      margin + 40,
-      totalY + 42,
-    )
-
-    ctx.textAlign = "right"
-    ctx.font =
-      "800 30px Arial, sans-serif"
-
-    ctx.fillText(
       formatVND(
         receipt.totalReceive,
       ),
-      width - margin - 40,
-      totalY + 42,
+      margin + 36,
+      highlightY + 41,
+      contentWidth - 72,
+      {
+        strong: true,
+      },
     )
   }
 
   y =
-    totalCardY +
-    totalCardHeight
+    summaryY +
+    summaryHeight
 
   /*
-   * QR — chỉ phiếu thu.
+   * ---------------------------------------------------------
+   * QR — chỉ phiếu thu
+   * ---------------------------------------------------------
    */
   if (qrImage) {
-    y += 34
-
-    ctx.fillStyle = COLORS.blueSoft
-    ctx.strokeStyle = "#d4e0f3"
+    y += 38
 
     const qrCardHeight =
-      95 +
-      qrHeight +
-      65
+      qrSectionHeight
 
-    roundedRect(
-      ctx,
+    drawCard(
       margin,
       y,
       contentWidth,
       qrCardHeight,
-      18,
+      COLORS.secondary,
+      COLORS.border,
+      15,
     )
 
-    ctx.fill()
-    ctx.stroke()
+    ctx.fillStyle =
+      COLORS.strong
 
-    ctx.fillStyle = COLORS.navy
     ctx.textAlign = "center"
-    ctx.font =
-      "800 27px Arial, sans-serif"
+
+    ctx.font = font(700, 30)
 
     ctx.fillText(
       "Quét QR để đóng đúng số tiền",
       width / 2,
-      y + 46,
+      y + 49,
     )
 
     const qrX =
       (width - qrWidth) / 2
 
-    const qrY = y + 70
+    const qrY = y + 76
 
     /*
-     * Giữ đúng aspect ratio của VietQR.
+     * QR giữ đúng tỷ lệ naturalWidth/naturalHeight.
      */
     ctx.drawImage(
       qrImage,
@@ -1549,21 +1698,38 @@ async function createReceiptJpeg(
       qrHeight,
     )
 
-    ctx.fillStyle = COLORS.muted
-    ctx.font =
-      "24px Arial, sans-serif"
+    ctx.fillStyle =
+      COLORS.muted
 
-    ctx.fillText(
-      `Nội dung: ${transferText(
+    ctx.font = font(400, 27)
+
+    const prefix =
+      "Nội dung: "
+
+    const content =
+      transferText(
         receipt,
         date,
-      )}`,
+      )
+
+    const fullText =
+      `${prefix}${content}`
+
+    ctx.fillText(
+      fullText,
       width / 2,
-      qrY + qrHeight + 39,
+      qrY +
+        qrHeight +
+        42,
     )
 
     y += qrCardHeight
   }
+
+  /*
+   * Chừa khoảng trắng cuối ảnh.
+   */
+  y += 55
 
   return canvasToJpegFile(
     canvas,
