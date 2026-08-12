@@ -55,19 +55,37 @@ export async function POST(request: NextRequest) {
 
     const admin = adminClient()
 
-    const { data: lockRow, error: lockError } = await admin
-      .from("login_pin_attempts")
-      .select("locked_until")
-      .eq("phone", phone)
-      .maybeSingle()
+    async function registerFailure() {
+      const { error } = await admin.rpc("register_pin_failure", {
+        p_phone: phone,
+      })
+      if (error) console.error("register_pin_failure:", error)
+    }
 
-    if (lockError) {
-      console.error("login lock check:", lockError)
+    // Hai bước đọc độc lập nên chạy song song. app_users là nguồn ánh xạ
+    // SĐT -> Supabase Auth user và cũng lưu email Auth hiện tại.
+    // Hụi viên/admin có thể dùng email kỹ thuật; super admin vẫn giữ email
+    // thật để còn đường recovery. Không suy diễn email từ số điện thoại ở đây.
+    const [lockResult, profileResult] = await Promise.all([
+      admin
+        .from("login_pin_attempts")
+        .select("locked_until")
+        .eq("phone", phone)
+        .maybeSingle(),
+      admin
+        .from("app_users")
+        .select("auth_user_id, email, is_active")
+        .eq("phone", phone)
+        .maybeSingle(),
+    ])
+
+    if (lockResult.error) {
+      console.error("login lock check:", lockResult.error)
     }
 
     if (
-      lockRow?.locked_until &&
-      new Date(lockRow.locked_until).getTime() > Date.now()
+      lockResult.data?.locked_until &&
+      new Date(lockResult.data.locked_until).getTime() > Date.now()
     ) {
       return NextResponse.json(
         {
@@ -78,22 +96,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    async function registerFailure() {
-      const { error } = await admin.rpc("register_pin_failure", {
-        p_phone: phone,
-      })
-      if (error) console.error("register_pin_failure:", error)
-    }
-
-    // Dùng app_users làm bảng ánh xạ SĐT -> Supabase Auth user.
-    const { data: profile, error: profileError } = await admin
-      .from("app_users")
-      .select("auth_user_id, is_active")
-      .eq("phone", phone)
-      .maybeSingle()
+    const profile = profileResult.data
 
     if (
-      profileError ||
+      profileResult.error ||
       !profile ||
       !profile.is_active ||
       !profile.auth_user_id
@@ -105,25 +111,32 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { data: authData, error: authUserError } =
-      await admin.auth.admin.getUserById(profile.auth_user_id)
+    // Bình thường không cần gọi Admin Auth thêm một vòng chỉ để lấy email.
+    // Fallback này giữ tương thích cho tài khoản cũ nếu app_users.email trống.
+    let authEmail = String(profile.email ?? "").trim()
 
-    const authUser = authData.user
+    if (!authEmail) {
+      const { data: authData, error: authUserError } =
+        await admin.auth.admin.getUserById(profile.auth_user_id)
 
-    if (authUserError || !authUser?.email) {
-      await registerFailure()
-      return NextResponse.json(
-        { error: "Số điện thoại hoặc mã 4 số không đúng." },
-        { status: 401 },
-      )
+      if (authUserError || !authData.user?.email) {
+        await registerFailure()
+        return NextResponse.json(
+          { error: "Số điện thoại hoặc mã 4 số không đúng." },
+          { status: 401 },
+        )
+      }
+
+      authEmail = authData.user.email
     }
 
     const login = loginClient()
     const internalPassword = authPasswordFromPin(pin)
 
-    // Chuẩn chính: email Auth phía dưới + password nội bộ SOHUI-xxxx.
+    // Chuẩn chính: email Auth (email kỹ thuật hoặc email thật của super admin)
+    // + password nội bộ SOHUI-xxxx.
     let signIn = await login.auth.signInWithPassword({
-      email: authUser.email,
+      email: authEmail,
       password: internalPassword,
     })
 
@@ -131,7 +144,7 @@ export async function POST(request: NextRequest) {
     // Nếu login được bằng PIN thô, tự chuyển về chuẩn nội bộ.
     if (signIn.error) {
       const legacy = await login.auth.signInWithPassword({
-        email: authUser.email,
+        email: authEmail,
         password: pin,
       })
 
@@ -167,11 +180,18 @@ export async function POST(request: NextRequest) {
       console.error("clear_pin_failures:", clearError)
     }
 
-    // Chỉ trả token phiên; tuyệt đối không trả email Auth kỹ thuật.
-    return NextResponse.json({
-      access_token: signIn.data.session.access_token,
-      refresh_token: signIn.data.session.refresh_token,
-    })
+    // Chỉ trả token phiên; tuyệt đối không trả email Auth kỹ thuật/email thật.
+    return NextResponse.json(
+      {
+        access_token: signIn.data.session.access_token,
+        refresh_token: signIn.data.session.refresh_token,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    )
   } catch (error) {
     console.error("phone-login error:", error)
     return NextResponse.json(
