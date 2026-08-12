@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react"
 import {
@@ -13,11 +14,14 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Dices,
   LoaderCircle,
   LockKeyhole,
   Minus,
   Plus,
   RefreshCw,
+  RotateCw,
+  Sparkles,
   X,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -83,12 +87,26 @@ type PeriodItem = {
   hasConfirmedMoney: boolean
 }
 
+type WheelCandidate = {
+  share: ShareRow
+  member: MemberRow | null
+}
+
 function todayInVietnam() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Ho_Chi_Minh",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+  }).format(new Date())
+}
+
+function timeInVietnam() {
+  return new Intl.DateTimeFormat("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   }).format(new Date())
 }
 
@@ -142,6 +160,49 @@ function defaultOpenedAt(period: PeriodRow, group: GroupRow) {
   return `${period.scheduled_date}T${time}`
 }
 
+function stripRandomNote(value: string) {
+  return value
+    .split("\n")
+    .filter(
+      (line) =>
+        !line.trim().startsWith("[Bốc thăm ngẫu nhiên"),
+    )
+    .join("\n")
+    .trim()
+}
+
+function appendRandomNote(
+  existingNotes: string,
+  shareNumber: number,
+  memberName: string,
+) {
+  const manualNotes = stripRandomNote(existingNotes)
+
+  const randomLine =
+    `[Bốc thăm ngẫu nhiên ${timeInVietnam()}] ` +
+    `Chân ${shareNumber} — ${memberName} được chọn.`
+
+  return manualNotes
+    ? `${randomLine}\n${manualNotes}`
+    : randomLine
+}
+
+function secureRandomIndex(length: number) {
+  if (length <= 1) return 0
+
+  const maxUint = 0xffffffff
+  const limit =
+    maxUint - ((maxUint + 1) % length)
+
+  const buffer = new Uint32Array(1)
+
+  do {
+    crypto.getRandomValues(buffer)
+  } while (buffer[0] > limit)
+
+  return buffer[0] % length
+}
+
 export function KhuiHomNayPage() {
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [shares, setShares] = useState<ShareRow[]>([])
@@ -149,10 +210,13 @@ export function KhuiHomNayPage() {
   const [members, setMembers] = useState<MemberRow[]>([])
   const [periodPayments, setPeriodPayments] =
     useState<PeriodPaymentRow[]>([])
+
   const [selectedDate, setSelectedDate] =
     useState(todayInVietnam())
+
   const [editingPeriodId, setEditingPeriodId] =
     useState<string | null>(null)
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
@@ -224,6 +288,7 @@ export function KhuiHomNayPage() {
     setPeriodPayments(
       (paymentsResult.data ?? []) as PeriodPaymentRow[],
     )
+
     setLoading(false)
   }, [])
 
@@ -232,7 +297,10 @@ export function KhuiHomNayPage() {
   }, [loadData])
 
   const groupsById = useMemo(
-    () => new Map(groups.map((group) => [group.id, group])),
+    () =>
+      new Map(
+        groups.map((group) => [group.id, group]),
+      ),
     [groups],
   )
 
@@ -321,26 +389,6 @@ export function KhuiHomNayPage() {
     sharesByGroup,
   ])
 
-  const availableDates = useMemo(() => {
-    const activeGroupIds = new Set(
-      groups.map((group) => group.id),
-    )
-
-    return [
-      ...new Set(
-        periods
-          .filter(
-            (period) =>
-              activeGroupIds.has(period.group_id) &&
-              period.status !== "cancelled",
-          )
-          .map((period) => period.scheduled_date),
-      ),
-    ]
-      .sort((a, b) => b.localeCompare(a))
-      .slice(0, 12)
-  }, [groups, periods])
-
   const editingItem =
     items.find(
       (item) =>
@@ -410,8 +458,8 @@ export function KhuiHomNayPage() {
       </div>
 
       <Card className="p-4">
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr] sm:items-end">
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium sm:max-w-[260px]">
             Ngày khui
 
             <Input
@@ -424,31 +472,21 @@ export function KhuiHomNayPage() {
             />
           </label>
 
-          <div className="min-w-0">
-            <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-              Ngày có kỳ gần đây
-            </p>
-
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {availableDates.map((date) => (
-                <button
-                  type="button"
-                  key={date}
-                  onClick={() => {
-                    setSelectedDate(date)
-                    setEditingPeriodId(null)
-                  }}
-                  className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium ${
-                    selectedDate === date
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "bg-background text-muted-foreground"
-                  }`}
-                >
-                  {formatDate(date)}
-                </button>
-              ))}
-            </div>
-          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 sm:w-auto"
+            disabled={
+              selectedDate === todayInVietnam()
+            }
+            onClick={() => {
+              setSelectedDate(todayInVietnam())
+              setEditingPeriodId(null)
+            }}
+          >
+            <CalendarDays className="size-4" />
+            Hôm nay
+          </Button>
         </div>
       </Card>
 
@@ -468,7 +506,7 @@ export function KhuiHomNayPage() {
             </p>
 
             <p className="mt-1 text-sm text-muted-foreground">
-              Chọn một ngày khác để xem các kỳ đã lên lịch.
+              Chọn ngày khác hoặc quay về hôm nay.
             </p>
           </div>
         </Card>
@@ -750,6 +788,18 @@ function KhuiDialog({
     ],
   )
 
+  const wheelCandidates = useMemo<WheelCandidate[]>(
+    () =>
+      eligibleShares.map((share) => ({
+        share,
+        member:
+          membersById.get(
+            share.member_id,
+          ) ?? null,
+      })),
+    [eligibleShares, membersById],
+  )
+
   const minimumBid = Number(
     group.minimum_bid_amount || 0,
   )
@@ -788,6 +838,9 @@ function KhuiDialog({
 
   const [error, setError] = useState("")
 
+  const [wheelOpen, setWheelOpen] =
+    useState(false)
+
   const fee = completed
     ? Number(
         period.fee_amount ||
@@ -798,6 +851,7 @@ function KhuiDialog({
 
   const preview = useMemo(() => {
     const bid = Number(bidAmount || 0)
+
     const contribution = Number(
       group.contribution_amount || 0,
     )
@@ -863,6 +917,43 @@ function KhuiDialog({
         winnerShare.member_id,
       ) ?? null
     : null
+
+  function handleManualWinnerChange(
+    shareId: string,
+  ) {
+    setWinnerShareId(shareId)
+
+    setNotes((current) =>
+      stripRandomNote(current),
+    )
+
+    setPreviewReady(false)
+    setError("")
+  }
+
+  function handleRandomWinner(
+    candidate: WheelCandidate,
+  ) {
+    const memberName =
+      candidate.member?.full_name ??
+      "Không rõ"
+
+    setWinnerShareId(
+      candidate.share.id,
+    )
+
+    setNotes((current) =>
+      appendRandomNote(
+        current,
+        candidate.share.share_number,
+        memberName,
+      ),
+    )
+
+    setPreviewReady(false)
+    setError("")
+    setWheelOpen(false)
+  }
 
   function validateBid(value: number) {
     if (value < minimumBid) {
@@ -1031,348 +1122,721 @@ function KhuiDialog({
   }
 
   return (
+    <>
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/50 p-3 sm:p-4"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(event) => {
+          if (
+            event.target ===
+            event.currentTarget
+          ) {
+            onClose()
+          }
+        }}
+      >
+        <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className="font-mono"
+                >
+                  {group.code || "CHƯA-MÃ"}
+                </Badge>
+
+                <h2 className="text-lg font-bold">
+                  {completed
+                    ? `Kỳ ${period.period_number} đã chốt`
+                    : `Khui kỳ ${period.period_number}`}
+                </h2>
+              </div>
+
+              <p className="mt-1 text-sm text-muted-foreground">
+                {group.name} ·{" "}
+                {formatDate(
+                  period.scheduled_date,
+                )}
+              </p>
+            </div>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              aria-label="Đóng"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+
+          {locked && (
+            <Card className="mt-4 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <div className="flex gap-2">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+
+                <p>
+                  Kỳ này đã có xác nhận thu/chi. Bạn vẫn xem được kết quả nhưng app khóa việc sửa để tránh làm lệch phiếu và cân đối.
+                </p>
+              </div>
+            </Card>
+          )}
+
+          <form
+            className="mt-5 space-y-5"
+            onSubmit={submit}
+          >
+            <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 sm:grid-cols-3">
+              <ConfigValue
+                label="Mệnh giá"
+                value={formatVND(
+                  group.contribution_amount,
+                )}
+              />
+
+              <ConfigValue
+                label="Bước thăm"
+                value={formatVND(
+                  bidStep,
+                )}
+                locked
+              />
+
+              <ConfigValue
+                label="Tiền thảo"
+                value={formatVND(
+                  fee,
+                )}
+                locked
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  htmlFor="winner-share"
+                  className="text-sm font-medium"
+                >
+                  Chân hốt
+                </label>
+
+                {!locked && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={
+                      wheelCandidates.length === 0
+                    }
+                    onClick={() =>
+                      setWheelOpen(true)
+                    }
+                  >
+                    <Dices className="size-4" />
+                    Bốc thăm
+                  </Button>
+                )}
+              </div>
+
+              <select
+                id="winner-share"
+                required
+                disabled={locked}
+                className="mt-1.5 h-11 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-60"
+                value={winnerShareId}
+                onChange={(event) =>
+                  handleManualWinnerChange(
+                    event.target.value,
+                  )
+                }
+              >
+                <option value="">
+                  Chọn chân hốt
+                </option>
+
+                {eligibleShares.map(
+                  (share) => {
+                    const member =
+                      membersById.get(
+                        share.member_id,
+                      )
+
+                    return (
+                      <option
+                        key={share.id}
+                        value={share.id}
+                      >
+                        Chân{" "}
+                        {share.share_number} —{" "}
+                        {member?.full_name ??
+                          "Không rõ"}
+                        {member?.phone
+                          ? ` — ${member.phone}`
+                          : ""}
+                      </option>
+                    )
+                  },
+                )}
+              </select>
+
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Chỉ hiển thị các chân đang hoạt động và chưa từng hốt.
+              </p>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium">
+                Giá thăm
+              </p>
+
+              <div className="mt-2 grid grid-cols-[52px_minmax(0,1fr)_52px] items-stretch gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-12"
+                  disabled={
+                    locked ||
+                    bidAmount <= minimumBid
+                  }
+                  onClick={() =>
+                    changeBid("down")
+                  }
+                  aria-label="Giảm giá thăm"
+                >
+                  <Minus className="size-5" />
+                </Button>
+
+                <div className="flex h-12 items-center justify-center rounded-md border bg-background px-3 text-center text-lg font-bold tabular-nums">
+                  {formatVND(bidAmount)}
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-12"
+                  disabled={locked}
+                  onClick={() =>
+                    changeBid("up")
+                  }
+                  aria-label="Tăng giá thăm"
+                >
+                  <Plus className="size-5" />
+                </Button>
+              </div>
+
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Tối thiểu{" "}
+                {formatVND(
+                  minimumBid,
+                )}{" "}
+                · mỗi lần tăng/giảm{" "}
+                {formatVND(
+                  bidStep,
+                )}
+              </p>
+            </div>
+
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Ngày giờ khui
+
+              <Input
+                type="datetime-local"
+                required
+                disabled={locked}
+                value={openedAt}
+                onChange={(event) =>
+                  setOpenedAt(
+                    event.target.value,
+                  )
+                }
+              />
+            </label>
+
+            {!completed && (
+              <Button
+                type="button"
+                variant={
+                  previewReady
+                    ? "outline"
+                    : "secondary"
+                }
+                className="w-full"
+                onClick={
+                  calculatePreview
+                }
+              >
+                {previewReady ? (
+                  <>
+                    <CheckCircle2 className="size-4 text-emerald-600" />
+                    Đã tính thử
+                  </>
+                ) : (
+                  "Tính thử"
+                )}
+              </Button>
+            )}
+
+            {(previewReady || completed) && (
+              <Card className="p-4">
+                <p className="font-semibold">
+                  Kết quả kỳ này
+                </p>
+
+                <div className="mt-3 space-y-2 text-sm">
+                  <CalcRow
+                    label="Người hốt"
+                    value={
+                      winnerMember?.full_name ??
+                      "Không rõ"
+                    }
+                  />
+
+                  <CalcRow
+                    label="Chân sống đóng"
+                    value={`${preview.livePayers} chân × ${formatVND(
+                      preview.liveContribution,
+                    )}`}
+                  />
+
+                  <CalcRow
+                    label="Chân đã hốt đóng"
+                    value={`${preview.deadPayers} chân × ${formatVND(
+                      preview.contribution,
+                    )}`}
+                  />
+
+                  <div className="border-t pt-2">
+                    <CalcRow
+                      label="Tổng hốt"
+                      value={formatVND(
+                        preview.grossHui,
+                      )}
+                      strong
+                    />
+
+                    <CalcRow
+                      label="Trừ tiền thảo"
+                      value={`− ${formatVND(
+                        fee,
+                      )}`}
+                    />
+                  </div>
+
+                  <div className="border-t pt-2">
+                    <CalcRow
+                      label="Chủ hụi giao"
+                      value={formatVND(
+                        preview.payout,
+                      )}
+                      strong
+                      highlight
+                    />
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Ghi chú
+
+              <textarea
+                disabled={locked}
+                className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
+                value={notes}
+                onChange={(event) =>
+                  setNotes(
+                    event.target.value,
+                  )
+                }
+                placeholder="Chỉ ghi khi kỳ này có trường hợp đặc biệt..."
+              />
+
+              <span className="text-xs font-normal text-muted-foreground">
+                Nếu người hốt được chọn bằng bốc thăm, app sẽ tự ghi lại tại đây.
+              </span>
+            </label>
+
+            {error && (
+              <p
+                className="text-sm text-destructive"
+                role="alert"
+              >
+                {error}
+              </p>
+            )}
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onClose}
+              >
+                Đóng
+              </Button>
+
+              {!locked && (
+                <Button
+                  type="submit"
+                  disabled={
+                    saving ||
+                    (!completed &&
+                      !previewReady)
+                  }
+                >
+                  {saving && (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  )}
+
+                  {completed
+                    ? "Lưu chỉnh sửa"
+                    : "Chốt kỳ"}
+                </Button>
+              )}
+            </div>
+          </form>
+        </Card>
+      </div>
+
+      {wheelOpen && (
+        <LuckyWheelDialog
+          candidates={wheelCandidates}
+          onClose={() =>
+            setWheelOpen(false)
+          }
+          onConfirm={
+            handleRandomWinner
+          }
+        />
+      )}
+    </>
+  )
+}
+
+function LuckyWheelDialog({
+  candidates,
+  onClose,
+  onConfirm,
+}: {
+  candidates: WheelCandidate[]
+  onClose: () => void
+  onConfirm: (
+    candidate: WheelCandidate,
+  ) => void
+}) {
+  const [rotation, setRotation] =
+    useState(0)
+
+  const [spinning, setSpinning] =
+    useState(false)
+
+  const [result, setResult] =
+    useState<WheelCandidate | null>(null)
+
+  const timerRef =
+    useRef<ReturnType<
+      typeof setTimeout
+    > | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(
+          timerRef.current,
+        )
+      }
+    }
+  }, [])
+
+  const sliceAngle =
+    360 / Math.max(candidates.length, 1)
+
+  const wheelGradient = useMemo(() => {
+    const colors = [
+      "#dbeafe",
+      "#fef3c7",
+      "#dcfce7",
+      "#fce7f3",
+      "#ede9fe",
+      "#ffedd5",
+    ]
+
+    return `conic-gradient(${candidates
+      .map((_, index) => {
+        const start =
+          index * sliceAngle
+
+        const end =
+          (index + 1) *
+          sliceAngle
+
+        return `${
+          colors[
+            index %
+              colors.length
+          ]
+        } ${start}deg ${end}deg`
+      })
+      .join(", ")})`
+  }, [
+    candidates,
+    sliceAngle,
+  ])
+
+  function spinWheel() {
+    if (
+      spinning ||
+      candidates.length === 0
+    ) {
+      return
+    }
+
+    if (timerRef.current) {
+      clearTimeout(
+        timerRef.current,
+      )
+    }
+
+    const winnerIndex =
+      secureRandomIndex(
+        candidates.length,
+      )
+
+    const chosenCenter =
+      winnerIndex *
+        sliceAngle +
+      sliceAngle / 2
+
+    const targetRotation =
+      360 * 6 +
+      (360 - chosenCenter)
+
+    setResult(null)
+    setSpinning(true)
+    setRotation(0)
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setRotation(
+          targetRotation,
+        )
+      })
+    })
+
+    timerRef.current =
+      setTimeout(() => {
+        setResult(
+          candidates[
+            winnerIndex
+          ],
+        )
+
+        setSpinning(false)
+      }, 3200)
+  }
+
+  return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/50 p-3 sm:p-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/60 p-3 sm:p-4"
       role="dialog"
       aria-modal="true"
-      onMouseDown={(event) => {
-        if (
-          event.target ===
-          event.currentTarget
-        ) {
-          onClose()
-        }
-      }}
+      aria-label="Bốc thăm người hốt"
     >
-      <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto p-4 sm:p-5">
+      <Card className="max-h-[96vh] w-full max-w-lg overflow-y-auto p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                variant="outline"
-                className="font-mono"
-              >
-                {group.code || "CHƯA-MÃ"}
-              </Badge>
+          <div>
+            <div className="flex items-center gap-2">
+              <Dices className="size-5 text-primary" />
 
               <h2 className="text-lg font-bold">
-                {completed
-                  ? `Kỳ ${period.period_number} đã chốt`
-                  : `Khui kỳ ${period.period_number}`}
+                Bốc thăm người hốt
               </h2>
             </div>
 
             <p className="mt-1 text-sm text-muted-foreground">
-              {group.name} ·{" "}
-              {formatDate(
-                period.scheduled_date,
-              )}
+              {candidates.length} chân đủ điều kiện tham gia
             </p>
           </div>
 
           <Button
+            type="button"
             variant="ghost"
             size="icon"
+            disabled={spinning}
             onClick={onClose}
-            aria-label="Đóng"
           >
             <X className="size-4" />
           </Button>
         </div>
 
-        {locked && (
-          <Card className="mt-4 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-            <div className="flex gap-2">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-
-              <p>
-                Kỳ này đã có xác nhận thu/chi. Bạn vẫn xem được kết quả nhưng app khóa việc sửa để tránh làm lệch phiếu và cân đối.
-              </p>
-            </div>
-          </Card>
-        )}
-
-        <form
-          className="mt-5 space-y-5"
-          onSubmit={submit}
-        >
-          <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 sm:grid-cols-3">
-            <ConfigValue
-              label="Mệnh giá"
-              value={formatVND(
-                group.contribution_amount,
-              )}
-            />
-
-            <ConfigValue
-              label="Bước thăm"
-              value={formatVND(
-                bidStep,
-              )}
-              locked
-            />
-
-            <ConfigValue
-              label="Tiền thảo"
-              value={formatVND(
-                fee,
-              )}
-              locked
-            />
-          </div>
-
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Chân hốt
-
-            <select
-              required
-              disabled={locked}
-              className="h-11 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-60"
-              value={winnerShareId}
-              onChange={(event) => {
-                setWinnerShareId(
-                  event.target.value,
-                )
-                setPreviewReady(false)
-                setError("")
-              }}
-            >
-              <option value="">
-                Chọn chân hốt
-              </option>
-
-              {eligibleShares.map(
-                (share) => {
-                  const member =
-                    membersById.get(
-                      share.member_id,
-                    )
-
-                  return (
-                    <option
-                      key={share.id}
-                      value={share.id}
-                    >
-                      Chân{" "}
-                      {share.share_number} —{" "}
-                      {member?.full_name ??
-                        "Không rõ"}
-                      {member?.phone
-                        ? ` — ${member.phone}`
-                        : ""}
-                    </option>
-                  )
-                },
-              )}
-            </select>
-          </label>
-
-          <div>
-            <p className="text-sm font-medium">
-              Giá thăm
+        {candidates.length === 0 ? (
+          <div className="py-10 text-center">
+            <p className="font-semibold">
+              Không còn chân đủ điều kiện bốc thăm
             </p>
+          </div>
+        ) : (
+          <>
+            <div className="mt-6 flex justify-center">
+              <div className="relative h-[280px] w-[280px] max-w-full">
+                <div className="absolute left-1/2 top-[-7px] z-20 -translate-x-1/2">
+                  <div
+                    className="h-0 w-0 border-x-[14px] border-t-[24px] border-x-transparent border-t-foreground"
+                    aria-hidden="true"
+                  />
+                </div>
 
-            <div className="mt-2 grid grid-cols-[52px_minmax(0,1fr)_52px] items-stretch gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="h-12"
-                disabled={
-                  locked ||
-                  bidAmount <= minimumBid
-                }
-                onClick={() =>
-                  changeBid("down")
-                }
-                aria-label="Giảm giá thăm"
-              >
-                <Minus className="size-5" />
-              </Button>
+                <div
+                  className="absolute inset-0 overflow-hidden rounded-full border-4 border-background shadow-md"
+                  style={{
+                    background:
+                      wheelGradient,
+                    transform: `rotate(${rotation}deg)`,
+                    transition:
+                      spinning
+                        ? "transform 3.2s cubic-bezier(0.12, 0.68, 0.14, 1)"
+                        : "none",
+                  }}
+                >
+                  {candidates.map(
+                    (
+                      candidate,
+                      index,
+                    ) => {
+                      const angle =
+                        index *
+                          sliceAngle +
+                        sliceAngle /
+                          2
 
-              <div className="flex h-12 items-center justify-center rounded-md border bg-background px-3 text-center text-lg font-bold tabular-nums">
-                {formatVND(bidAmount)}
+                      return (
+                        <div
+                          key={
+                            candidate
+                              .share
+                              .id
+                          }
+                          className="absolute left-1/2 top-1/2 h-0 w-0"
+                          style={{
+                            transform: `rotate(${angle}deg)`,
+                          }}
+                        >
+                          <span
+                            className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[112px] whitespace-nowrap rounded bg-background/80 px-1.5 py-0.5 text-[11px] font-bold text-foreground"
+                            style={{
+                              transform: `rotate(${-angle}deg)`,
+                            }}
+                          >
+                            Chân{" "}
+                            {
+                              candidate
+                                .share
+                                .share_number
+                            }
+                          </span>
+                        </div>
+                      )
+                    },
+                  )}
+
+                  <div className="absolute left-1/2 top-1/2 flex size-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-background bg-primary text-primary-foreground shadow">
+                    <Sparkles className="size-5" />
+                  </div>
+                </div>
               </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="h-12"
-                disabled={locked}
-                onClick={() =>
-                  changeBid("up")
-                }
-                aria-label="Tăng giá thăm"
-              >
-                <Plus className="size-5" />
-              </Button>
             </div>
 
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Tối thiểu{" "}
-              {formatVND(
-                minimumBid,
-              )}{" "}
-              · mỗi lần tăng/giảm{" "}
-              {formatVND(
-                bidStep,
-              )}
-            </p>
-          </div>
-
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Ngày giờ khui
-
-            <Input
-              type="datetime-local"
-              required
-              disabled={locked}
-              value={openedAt}
-              onChange={(event) =>
-                setOpenedAt(
-                  event.target.value,
-                )
-              }
-            />
-          </label>
-
-          {!completed && (
-            <Button
-              type="button"
-              variant={
-                previewReady
-                  ? "outline"
-                  : "secondary"
-              }
-              className="w-full"
-              onClick={
-                calculatePreview
-              }
+            <div
+              className="mt-5 min-h-[82px] rounded-lg border bg-muted/30 p-4 text-center"
+              aria-live="polite"
             >
-              {previewReady ? (
+              {spinning ? (
                 <>
-                  <CheckCircle2 className="size-4 text-emerald-600" />
-                  Đã tính thử
+                  <RotateCw className="mx-auto size-5 animate-spin text-primary" />
+
+                  <p className="mt-2 font-semibold">
+                    Đang bốc thăm...
+                  </p>
+                </>
+              ) : result ? (
+                <>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Kết quả
+                  </p>
+
+                  <p className="mt-1 text-xl font-bold">
+                    Chân{" "}
+                    {
+                      result
+                        .share
+                        .share_number
+                    }
+                  </p>
+
+                  <p className="mt-0.5 font-semibold text-primary">
+                    {result.member
+                      ?.full_name ??
+                      "Không rõ"}
+                  </p>
                 </>
               ) : (
-                "Tính thử"
+                <>
+                  <p className="font-semibold">
+                    Sẵn sàng bốc thăm
+                  </p>
+
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Vòng quay chỉ gồm các chân chưa từng hốt.
+                  </p>
+                </>
               )}
-            </Button>
-          )}
+            </div>
 
-          {(previewReady || completed) && (
-            <Card className="p-4">
-              <p className="font-semibold">
-                Kết quả kỳ này
-              </p>
-
-              <div className="mt-3 space-y-2 text-sm">
-                <CalcRow
-                  label="Người hốt"
-                  value={
-                    winnerMember?.full_name ??
-                    "Không rõ"
-                  }
-                />
-
-                <CalcRow
-                  label="Chân sống đóng"
-                  value={`${preview.livePayers} chân × ${formatVND(
-                    preview.liveContribution,
-                  )}`}
-                />
-
-                <CalcRow
-                  label="Chân đã hốt đóng"
-                  value={`${preview.deadPayers} chân × ${formatVND(
-                    preview.contribution,
-                  )}`}
-                />
-
-                <div className="border-t pt-2">
-                  <CalcRow
-                    label="Tổng hốt"
-                    value={formatVND(
-                      preview.grossHui,
-                    )}
-                    strong
-                  />
-
-                  <CalcRow
-                    label="Trừ tiền thảo"
-                    value={`− ${formatVND(
-                      fee,
-                    )}`}
-                  />
-                </div>
-
-                <div className="border-t pt-2">
-                  <CalcRow
-                    label="Chủ hụi giao"
-                    value={formatVND(
-                      preview.payout,
-                    )}
-                    strong
-                    highlight
-                  />
-                </div>
-              </div>
-            </Card>
-          )}
-
-          <label className="flex flex-col gap-1.5 text-sm font-medium">
-            Ghi chú
-
-            <textarea
-              disabled={locked}
-              className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
-              value={notes}
-              onChange={(event) =>
-                setNotes(
-                  event.target.value,
-                )
-              }
-              placeholder="Chỉ ghi khi kỳ này có trường hợp đặc biệt..."
-            />
-          </label>
-
-          {error && (
-            <p
-              className="text-sm text-destructive"
-              role="alert"
-            >
-              {error}
-            </p>
-          )}
-
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-            >
-              Đóng
-            </Button>
-
-            {!locked && (
+            <div className="mt-4 flex flex-col gap-2">
               <Button
-                type="submit"
-                disabled={
-                  saving ||
-                  (!completed &&
-                    !previewReady)
-                }
+                type="button"
+                className="h-12 text-base font-bold"
+                disabled={spinning}
+                onClick={spinWheel}
               >
-                {saving && (
-                  <LoaderCircle className="size-4 animate-spin" />
-                )}
-
-                {completed
-                  ? "Lưu chỉnh sửa"
-                  : "Chốt kỳ"}
+                <Dices className="size-5" />
+                {result
+                  ? "Quay lại"
+                  : "QUAY"}
               </Button>
-            )}
-          </div>
-        </form>
+
+              {result && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  disabled={spinning}
+                  onClick={() =>
+                    onConfirm(result)
+                  }
+                >
+                  <CheckCircle2 className="size-4" />
+                  Chọn người này
+                </Button>
+              )}
+
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={spinning}
+                onClick={onClose}
+              >
+                Hủy
+              </Button>
+            </div>
+
+            <p className="mt-3 text-center text-xs leading-relaxed text-muted-foreground">
+              Kết quả bốc thăm chưa được lưu cho đến khi bạn chọn người này và chốt kỳ.
+            </p>
+          </>
+        )}
       </Card>
     </div>
   )
