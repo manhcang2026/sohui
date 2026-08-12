@@ -1910,17 +1910,34 @@ function PeriodDialog({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
-  const eligibleShares = [...day.shares]
+
+  const previousWinnerIds = new Set(
+  day.periods
     .filter(
-      (share) =>
-        share.status === "active" ||
-        share.id ===
-          period.winner_share_id,
+      (item) =>
+        item.period_number < period.period_number &&
+        isFinishedPeriod(item.status) &&
+        item.winner_share_id,
     )
-    .sort(
-      (a, b) =>
-        a.share_number - b.share_number,
-    )
+    .map(
+      (item) =>
+        item.winner_share_id as string,
+    ),
+)
+
+const eligibleShares = [...day.shares]
+  .filter(
+    (share) =>
+      (
+        share.status === "active" &&
+        !previousWinnerIds.has(share.id)
+      ) ||
+      share.id === period.winner_share_id,
+  )
+  .sort(
+    (a, b) =>
+      a.share_number - b.share_number,
+  )
 
   const defaultOpenedAt = period.opened_at
     ? new Date(
