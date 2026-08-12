@@ -21,6 +21,30 @@ function chunk<T>(items: T[], size: number) {
   return result
 }
 
+async function fetchAllPages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{
+    data: T[] | null
+    error: unknown
+  }>,
+) {
+  const result: T[] = []
+  const pageSize = 1000
+  let from = 0
+
+  while (true) {
+    const { data, error } = await fetchPage(from, from + pageSize - 1)
+    if (error) throw error
+
+    const rows = data ?? []
+    result.push(...rows)
+
+    if (rows.length < pageSize) break
+    from += pageSize
+  }
+
+  return result
+}
+
 async function fetchPaymentsForReceiptIds(receiptIds: string[]) {
   if (receiptIds.length === 0) return [] as PaymentRow[]
 
@@ -28,8 +52,6 @@ async function fetchPaymentsForReceiptIds(receiptIds: string[]) {
   const result: PaymentRow[] = []
   const pageSize = 1000
 
-  // Keep each IN-list small, and paginate each chunk so Supabase's row cap
-  // can never silently hide older payments from the receipt page.
   for (const ids of chunk(receiptIds, 100)) {
     let from = 0
 
@@ -60,29 +82,88 @@ async function fetchPaymentsForReceiptIds(receiptIds: string[]) {
   })
 }
 
-export async function loadReceiptPageData(
-  effectiveFrom: string,
-  effectiveTo: string,
+export async function fetchActivePaymentTotals(
+  receiptIds: string[],
 ) {
+  const totals = new Map<string, number>()
+  if (receiptIds.length === 0) return totals
+
+  const supabase = createClient()
+  const pageSize = 1000
+
+  for (const ids of chunk(receiptIds, 100)) {
+    let from = 0
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("receipt_payments")
+        .select("receipt_id, direction, amount, id")
+        .in("receipt_id", ids)
+        .eq("status", "active")
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1)
+
+      if (error) throw error
+
+      const rows = (data ?? []) as Array<{
+        id: string
+        receipt_id: string
+        direction: "collect" | "pay"
+        amount: number
+      }>
+
+      for (const payment of rows) {
+        const key = `${payment.receipt_id}|${payment.direction}`
+        totals.set(
+          key,
+          (totals.get(key) ?? 0) + Number(payment.amount || 0),
+        )
+      }
+
+      if (rows.length < pageSize) break
+      from += pageSize
+    }
+  }
+
+  return totals
+}
+
+export async function loadReceiptBaseData() {
   const supabase = createClient()
 
-  const [g, s, p, m, cfg, r] = await Promise.all([
-    supabase
-      .from("hui_groups")
-      .select(
-        "id, code, name, contribution_amount, total_shares, fee_amount",
-      ),
-    supabase
-      .from("hui_shares")
-      .select("id, group_id, member_id, share_number, status")
-      .order("share_number"),
-    supabase
-      .from("hui_periods")
-      .select(
-        "id, group_id, period_number, scheduled_date, opened_at, winner_share_id, bid_amount, fee_amount, status",
-      )
-      .order("period_number"),
-    supabase.from("members").select("id, full_name, phone"),
+  const [groups, shares, periods, members, cfg] = await Promise.all([
+    fetchAllPages<GroupRow>((from, to) =>
+      supabase
+        .from("hui_groups")
+        .select(
+          "id, code, name, contribution_amount, total_shares, fee_amount",
+        )
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllPages<ShareRow>((from, to) =>
+      supabase
+        .from("hui_shares")
+        .select("id, group_id, member_id, share_number, status")
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllPages<PeriodRow>((from, to) =>
+      supabase
+        .from("hui_periods")
+        .select(
+          "id, group_id, period_number, scheduled_date, opened_at, winner_share_id, bid_amount, fee_amount, status",
+        )
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllPages<MemberRow>((from, to) =>
+      supabase
+        .from("members")
+        .select("id, full_name, phone")
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
     supabase
       .from("app_settings")
       .select(
@@ -90,34 +171,57 @@ export async function loadReceiptPageData(
       )
       .eq("id", 1)
       .maybeSingle(),
-    effectiveFrom && effectiveTo && effectiveFrom <= effectiveTo
-      ? supabase
-          .from("hui_receipts")
-          .select(
-            "id, member_id, receipt_date, settlement_amount, note, status, cancelled_at, cancel_reason",
-          )
-          .gte("receipt_date", effectiveFrom)
-          .lte("receipt_date", effectiveTo)
-      : Promise.resolve({ data: [], error: null }),
   ])
 
-  const firstError =
-    g.error ?? s.error ?? p.error ?? m.error ?? cfg.error ?? r.error
+  if (cfg.error) throw cfg.error
 
-  if (firstError) throw firstError
+  return {
+    groups,
+    shares,
+    periods,
+    members,
+    settings: (cfg.data as SettingsRow | null) ?? EMPTY_SETTINGS,
+  }
+}
 
-  const receiptRows = (r.data ?? []) as ReceiptDbRow[]
+export async function loadReceiptLedgerData(
+  effectiveFrom: string,
+  effectiveTo: string,
+) {
+  if (!effectiveFrom || !effectiveTo || effectiveFrom > effectiveTo) {
+    return {
+      receiptRows: [] as ReceiptDbRow[],
+      payments: [] as PaymentRow[],
+    }
+  }
+
+  const supabase = createClient()
+  const receiptRows = await fetchAllPages<ReceiptDbRow>((from, to) =>
+    supabase
+      .from("hui_receipts")
+      .select(
+        "id, member_id, receipt_date, settlement_amount, note, status, cancelled_at, cancel_reason",
+      )
+      .gte("receipt_date", effectiveFrom)
+      .lte("receipt_date", effectiveTo)
+      .order("id", { ascending: true })
+      .range(from, to),
+  )
   const payments = await fetchPaymentsForReceiptIds(
     receiptRows.map((row) => row.id),
   )
 
-  return {
-    groups: (g.data ?? []) as GroupRow[],
-    shares: (s.data ?? []) as ShareRow[],
-    periods: (p.data ?? []) as PeriodRow[],
-    members: (m.data ?? []) as MemberRow[],
-    settings: (cfg.data as SettingsRow | null) ?? EMPTY_SETTINGS,
-    receiptRows,
-    payments,
-  }
+  return { receiptRows, payments }
+}
+
+export async function loadReceiptPageData(
+  effectiveFrom: string,
+  effectiveTo: string,
+) {
+  const [base, ledger] = await Promise.all([
+    loadReceiptBaseData(),
+    loadReceiptLedgerData(effectiveFrom, effectiveTo),
+  ])
+
+  return { ...base, ...ledger }
 }
