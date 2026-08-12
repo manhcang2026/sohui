@@ -1795,21 +1795,34 @@ export function PhieuThuChiPage() {
     )
   }
 
-  return (
+    return (
     <div className="mx-auto max-w-4xl space-y-4 p-4 md:p-6">
-      <div>
-        <h1 className="text-xl font-bold">
-          Lập phiếu thu–chi
-        </h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">
+            Phiếu
+          </h1>
 
-        <p className="mt-1 text-sm text-muted-foreground">
-          Phiếu được tự tổng hợp từ các kỳ hụi đã chốt trong ngày.
-        </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Thu và chi hụi được tổng hợp tự động từ các kỳ đã chốt.
+          </p>
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void loadData()}
+        >
+          <RefreshCw className="size-4" />
+          <span className="hidden sm:inline">
+            Làm mới
+          </span>
+        </Button>
       </div>
 
       <Card className="p-4">
-        <label className="flex max-w-xs flex-col gap-1.5 text-sm font-medium">
-          Ngày lập phiếu
+        <label className="flex max-w-[260px] flex-col gap-1.5 text-sm font-medium">
+          Ngày phiếu
 
           <Input
             type="date"
@@ -1828,25 +1841,14 @@ export function PhieuThuChiPage() {
         </p>
       )}
 
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="font-semibold">
-            Phiếu ngày {formatDate(selectedDate)}
-          </p>
+      <div>
+        <p className="font-semibold">
+          Phiếu ngày {formatDate(selectedDate)}
+        </p>
 
-          <p className="text-sm text-muted-foreground">
-            {receipts.length} hụi viên có phát sinh
-          </p>
-        </div>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void loadData()}
-        >
-          <RefreshCw className="size-4" />
-          Làm mới
-        </Button>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          {receipts.length} hụi viên có phát sinh
+        </p>
       </div>
 
       {receipts.length === 0 ? (
@@ -1864,90 +1866,144 @@ export function PhieuThuChiPage() {
           </div>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {receipts.map((receipt) => (
-            <Card
-              key={receipt.member.id}
-              className={`cursor-pointer p-4 transition-shadow hover:shadow-md ${
-                receipt.status === "cancelled"
-                  ? "opacity-60"
-                  : ""
-              }`}
-              onClick={() =>
-                setPreviewMemberId(
-                  receipt.member.id,
-                )
-              }
-            >
-              <div className="flex items-start gap-3">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                  <UserRound className="size-4" />
-                </div>
+        <div className="space-y-2.5">
+          {receipts.map((receipt) => {
+            const isCancelled =
+              receipt.status === "cancelled"
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold">
-                        {receipt.member.full_name}
-                      </p>
+            const isFinished =
+              !isCancelled &&
+              receipt.remainingAmount <= 0
 
-                      <p className="text-xs text-muted-foreground">
-                        {receipt.groupCount} dây ·{" "}
-                        {receipt.lines.length} phát sinh ·{" "}
-                        {receiptStatusLabel(
-                          receipt.status,
-                        )}
-                      </p>
+            const amountLabel =
+              isCancelled
+                ? "Đã hủy"
+                : isFinished
+                  ? "Đã thanh toán"
+                  : receipt.direction === "collect"
+                    ? "Cần thu"
+                    : receipt.direction === "pay"
+                      ? "Cần chi"
+                      : "Cân bằng"
+
+            const amountText =
+              isCancelled
+                ? "—"
+                : receipt.direction === "collect" &&
+                    receipt.remainingAmount > 0
+                  ? `+${formatVND(
+                      receipt.remainingAmount,
+                    )}`
+                  : receipt.direction === "pay" &&
+                      receipt.remainingAmount > 0
+                    ? `−${formatVND(
+                        receipt.remainingAmount,
+                      )}`
+                    : formatVND(
+                        receipt.remainingAmount,
+                      )
+
+            const amountClass =
+              isCancelled || isFinished
+                ? "text-muted-foreground"
+                : receipt.direction === "collect"
+                  ? "text-emerald-700"
+                  : receipt.direction === "pay"
+                    ? "text-red-600"
+                    : "text-muted-foreground"
+
+            const statusClass =
+              receipt.status === "paid"
+                ? "bg-emerald-100 text-emerald-700"
+                : receipt.status === "partial"
+                  ? "bg-amber-100 text-amber-800"
+                  : receipt.status === "cancelled"
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-amber-100 text-amber-800"
+
+            return (
+              <Card
+                key={receipt.member.id}
+                className={`cursor-pointer p-4 transition-shadow hover:shadow-md ${
+                  isCancelled
+                    ? "opacity-60"
+                    : ""
+                }`}
+                onClick={() =>
+                  setPreviewMemberId(
+                    receipt.member.id,
+                  )
+                }
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-4" />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold">
+                          {receipt.member.full_name}
+                        </p>
+
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {receipt.groupCount} dây ·{" "}
+                          {receipt.totalShares} chân
+                        </p>
+                      </div>
+
+                      <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
                     </div>
 
-                    <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
-                  </div>
+                    <div className="mt-3 flex items-end justify-between gap-4 border-t pt-3">
+                      <div className="min-w-0">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${statusClass}`}
+                        >
+                          {receiptStatusLabel(
+                            receipt.status,
+                          )}
+                        </span>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-                    <SummaryCell
-                      label="Tiền đóng"
-                      value={formatVND(
-                        receipt.totalPay,
-                      )}
-                    />
+                        {receipt.status ===
+                          "partial" && (
+                          <p className="mt-1.5 text-xs text-muted-foreground">
+                            Đã{" "}
+                            {receipt.direction ===
+                            "collect"
+                              ? "thu"
+                              : "chi"}{" "}
+                            {formatVND(
+                              receipt.paidAmount,
+                            )}
+                          </p>
+                        )}
+                      </div>
 
-                    <SummaryCell
-                      label="Tổng hốt hụi"
-                      value={formatVND(
-                        receipt.totalHuiAmount,
-                      )}
-                    />
+                      <div className="shrink-0 text-right">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          {amountLabel}
+                        </p>
 
-                    <SummaryCell
-                      label="Đã thu/chi"
-                      value={formatVND(
-                        receipt.paidAmount,
-                      )}
-                    />
-
-                    <SummaryCell
-                      label={
-                        receipt.direction === "collect"
-                          ? "Còn phải thu"
-                          : receipt.direction === "pay"
-                            ? "Còn phải chi"
-                            : "Cân bằng"
-                      }
-                      value={formatVND(
-                        receipt.remainingAmount,
-                      )}
-                      emphasize
-                    />
+                        <p
+                          className={`mt-0.5 text-xl font-bold tabular-nums ${amountClass}`}
+                        >
+                          {amountText}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
+
 
 function SummaryCell({
   label,
