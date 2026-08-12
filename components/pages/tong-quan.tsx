@@ -3,16 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   AlertCircle,
+  ArrowDownLeft,
+  ArrowUpRight,
+  CalendarDays,
   CheckCircle2,
   ChevronRight,
-  Coins,
-  FileText,
-  Flame,
-  Layers,
+  Clock3,
   LoaderCircle,
   RefreshCw,
-  TrendingUp,
-  Users,
   WalletCards,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -26,12 +24,6 @@ type Props = {
   onNavigate: (page: Page) => void
 }
 
-type MemberRow = {
-  id: string
-  full_name: string
-  is_active: boolean
-}
-
 type GroupRow = {
   id: string
   code: string | null
@@ -39,6 +31,7 @@ type GroupRow = {
   contribution_amount: number
   total_shares: number
   fee_amount: number
+  opening_time: string | null
   status: string
 }
 
@@ -47,15 +40,26 @@ type PeriodRow = {
   group_id: string
   period_number: number
   scheduled_date: string
+  scheduled_at: string | null
   winner_share_id: string | null
   bid_amount: number
   fee_amount: number
   status: string
 }
 
-type ReceiptRow = {
+type ShareRow = {
   id: string
   member_id: string
+  share_number: number
+}
+
+type MemberRow = {
+  id: string
+  full_name: string
+}
+
+type ReceiptRow = {
+  id: string
   receipt_date: string
   source_total_pay: number
   source_total_receive: number
@@ -82,8 +86,23 @@ function todayInVietnam() {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "—"
+
   const [year, month, day] = value.slice(0, 10).split("-")
   return `${day}/${month}/${year}`
+}
+
+function formatTime(value: string | null | undefined) {
+  if (!value) return ""
+
+  if (value.includes("T")) {
+    return new Date(value).toLocaleTimeString("vi-VN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Ho_Chi_Minh",
+    })
+  }
+
+  return value.slice(0, 5)
 }
 
 function formatVND(value: number) {
@@ -98,10 +117,19 @@ function isCompleted(status: string) {
   return status === "completed" || status === "opened"
 }
 
+function periodStatus(
+  period: PeriodRow,
+): "pending" | "editing" | "completed" {
+  if (isCompleted(period.status)) return "completed"
+  if (period.winner_share_id) return "editing"
+  return "pending"
+}
+
 export function TongQuanPage({ onNavigate }: Props) {
-  const [members, setMembers] = useState<MemberRow[]>([])
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [periods, setPeriods] = useState<PeriodRow[]>([])
+  const [shares, setShares] = useState<ShareRow[]>([])
+  const [members, setMembers] = useState<MemberRow[]>([])
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
   const [payments, setPayments] = useState<PaymentRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -116,54 +144,66 @@ export function TongQuanPage({ onNavigate }: Props) {
     const supabase = createClient()
 
     const [
-      membersResult,
       groupsResult,
       periodsResult,
+      sharesResult,
+      membersResult,
       receiptsResult,
       paymentsResult,
     ] = await Promise.all([
       supabase
-        .from("members")
-        .select("id, full_name, is_active"),
-      supabase
         .from("hui_groups")
         .select(
-          "id, code, name, contribution_amount, total_shares, fee_amount, status",
-        ),
+          "id, code, name, contribution_amount, total_shares, fee_amount, opening_time, status",
+        )
+        .eq("status", "active"),
+
       supabase
         .from("hui_periods")
         .select(
-          "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, fee_amount, status",
+          "id, group_id, period_number, scheduled_date, scheduled_at, winner_share_id, bid_amount, fee_amount, status",
         )
-        .order("scheduled_date")
+        .order("scheduled_at")
         .order("period_number"),
+
+      supabase
+        .from("hui_shares")
+        .select("id, member_id, share_number"),
+
+      supabase
+        .from("members")
+        .select("id, full_name"),
+
       supabase
         .from("hui_receipts")
         .select(
-          "id, member_id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
+          "id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
         ),
+
       supabase
         .from("receipt_payments")
         .select("id, receipt_id, direction, amount, status"),
     ])
 
     const firstError =
-      membersResult.error ??
       groupsResult.error ??
       periodsResult.error ??
+      sharesResult.error ??
+      membersResult.error ??
       receiptsResult.error ??
       paymentsResult.error
 
     if (firstError) {
       console.error(firstError)
-      setError("Không thể tải dữ liệu Tổng quan.")
+      setError("Không thể tải dữ liệu Hôm nay.")
       setLoading(false)
       return
     }
 
-    setMembers((membersResult.data ?? []) as MemberRow[])
     setGroups((groupsResult.data ?? []) as GroupRow[])
     setPeriods((periodsResult.data ?? []) as PeriodRow[])
+    setShares((sharesResult.data ?? []) as ShareRow[])
+    setMembers((membersResult.data ?? []) as MemberRow[])
     setReceipts((receiptsResult.data ?? []) as ReceiptRow[])
     setPayments((paymentsResult.data ?? []) as PaymentRow[])
     setLoading(false)
@@ -174,214 +214,200 @@ export function TongQuanPage({ onNavigate }: Props) {
   }, [loadData])
 
   const dashboard = useMemo(() => {
-    const activeGroups = groups.filter((group) => group.status === "active")
-    const activeGroupIds = new Set(activeGroups.map((group) => group.id))
-
-    const activePeriods = periods.filter((period) =>
-      activeGroupIds.has(period.group_id),
+    const groupById = new Map(groups.map((group) => [group.id, group]))
+    const shareById = new Map(shares.map((share) => [share.id, share]))
+    const memberById = new Map(
+      members.map((member) => [member.id, member]),
     )
 
-    const periodsToday = activePeriods.filter(
-      (period) =>
-        period.scheduled_date === today &&
-        period.status !== "cancelled",
-    )
+    const todayPeriods = periods
+      .filter(
+        (period) =>
+          period.scheduled_date === today &&
+          period.status !== "cancelled" &&
+          groupById.has(period.group_id),
+      )
+      .sort((a, b) => {
+        const groupA = groupById.get(a.group_id)
+        const groupB = groupById.get(b.group_id)
 
-    const pendingToday = periodsToday.filter(
-      (period) => !isCompleted(period.status),
-    )
+        const timeA =
+          a.scheduled_at ??
+          groupA?.opening_time ??
+          ""
 
-    const completedToday = periodsToday.filter((period) =>
+        const timeB =
+          b.scheduled_at ??
+          groupB?.opening_time ??
+          ""
+
+        if (timeA !== timeB) {
+          return timeA.localeCompare(timeB)
+        }
+
+        return (groupA?.name ?? "").localeCompare(
+          groupB?.name ?? "",
+          "vi",
+        )
+      })
+
+    const completedPeriods = todayPeriods.filter((period) =>
       isCompleted(period.status),
     )
 
-    const activeReceipts = receipts.filter(
-      (receipt) => receipt.status !== "cancelled",
+    const pendingPeriods = todayPeriods.filter(
+      (period) => !isCompleted(period.status),
     )
 
-    const openReceipts = activeReceipts.filter(
+    const todayReceipts = receipts.filter(
       (receipt) =>
-        receipt.status === "open" || receipt.status === "partial",
+        receipt.receipt_date === today &&
+        receipt.status !== "cancelled",
     )
 
-    const paymentTotalsByReceipt = new Map<
+    const paymentTotals = new Map<
       string,
       { collected: number; paid: number }
     >()
 
-    let actualCollected = 0
-    let actualPaid = 0
-
     for (const payment of payments) {
       if (payment.status !== "active") continue
 
-      const current = paymentTotalsByReceipt.get(payment.receipt_id) ?? {
+      const current = paymentTotals.get(payment.receipt_id) ?? {
         collected: 0,
         paid: 0,
       }
 
       if (payment.direction === "collect") {
         current.collected += Number(payment.amount || 0)
-        actualCollected += Number(payment.amount || 0)
       } else {
         current.paid += Number(payment.amount || 0)
-        actualPaid += Number(payment.amount || 0)
       }
 
-      paymentTotalsByReceipt.set(payment.receipt_id, current)
+      paymentTotals.set(payment.receipt_id, current)
     }
 
     let remainingCollect = 0
     let remainingPay = 0
+    let openCollectCount = 0
+    let openPayCount = 0
 
-    for (const receipt of openReceipts) {
+    for (const receipt of todayReceipts) {
+      if (
+        receipt.status !== "open" &&
+        receipt.status !== "partial"
+      ) {
+        continue
+      }
+
       const net =
         Number(receipt.source_total_pay || 0) -
         Number(receipt.source_total_receive || 0) +
         Number(receipt.settlement_amount || 0)
 
-      const paid = paymentTotalsByReceipt.get(receipt.id) ?? {
+      const paid = paymentTotals.get(receipt.id) ?? {
         collected: 0,
         paid: 0,
       }
 
       if (net > 0) {
-        remainingCollect += Math.max(0, net - paid.collected)
-      } else if (net < 0) {
-        remainingPay += Math.max(0, Math.abs(net) - paid.paid)
+        const remaining = Math.max(0, net - paid.collected)
+
+        if (remaining > 0) {
+          remainingCollect += remaining
+          openCollectCount += 1
+        }
+      }
+
+      if (net < 0) {
+        const remaining = Math.max(
+          0,
+          Math.abs(net) - paid.paid,
+        )
+
+        if (remaining > 0) {
+          remainingPay += remaining
+          openPayCount += 1
+        }
       }
     }
 
-    const totalFee = activePeriods
-      .filter((period) => isCompleted(period.status))
-      .reduce((sum, period) => {
-        const group = activeGroups.find(
-          (item) => item.id === period.group_id,
-        )
-        return (
-          sum +
-          Number(period.fee_amount ?? group?.fee_amount ?? 0)
-        )
-      }, 0)
+    const cards = todayPeriods.map((period) => {
+      const group = groupById.get(period.group_id)!
 
-    const groupProgress = activeGroups
-      .map((group) => {
-        const groupPeriods = activePeriods
-          .filter((period) => period.group_id === group.id)
-          .sort((a, b) => a.period_number - b.period_number)
+      const winnerShare = period.winner_share_id
+        ? shareById.get(period.winner_share_id)
+        : null
 
-        const completed = groupPeriods.filter((period) =>
-          isCompleted(period.status),
-        ).length
-
-        const nextPeriod = groupPeriods.find(
-          (period) =>
-            period.status === "scheduled" &&
-            period.scheduled_date >= today,
-        )
-
-        const total = Math.max(
-          group.total_shares,
-          groupPeriods.length,
-          1,
-        )
-
-        return {
-          group,
-          completed,
-          total,
-          progress: Math.min(
-            100,
-            Math.round((completed / total) * 100),
-          ),
-          nextPeriod,
-        }
-      })
-      .sort((a, b) => {
-        if (!a.nextPeriod && !b.nextPeriod) {
-          return a.group.name.localeCompare(b.group.name, "vi")
-        }
-        if (!a.nextPeriod) return 1
-        if (!b.nextPeriod) return -1
-        return a.nextPeriod.scheduled_date.localeCompare(
-          b.nextPeriod.scheduled_date,
-        )
-      })
-
-    return {
-      activeMembers: members.filter((member) => member.is_active).length,
-      activeGroups,
-      periodsToday,
-      pendingToday,
-      completedToday,
-      openReceipts,
-      actualCollected,
-      actualPaid,
-      cashNet: actualCollected - actualPaid,
-      remainingCollect,
-      remainingPay,
-      totalFee,
-      groupProgress,
-    }
-  }, [groups, members, payments, periods, receipts, today])
-
-  const tasks = useMemo(() => {
-    const groupById = new Map(
-      dashboard.activeGroups.map((group) => [group.id, group]),
-    )
-
-    const periodTasks = dashboard.pendingToday.map((period) => {
-      const group = groupById.get(period.group_id)
+      const winner = winnerShare
+        ? memberById.get(winnerShare.member_id)
+        : null
 
       return {
-        key: `period-${period.id}`,
-        icon: Flame,
-        iconClass: "text-orange-500",
-        text: `Khui kỳ ${period.period_number} — ${
-          group?.code ? `[${group.code}] ` : ""
-        }${group?.name ?? "Không rõ dây"}`,
-        action: () => onNavigate("khui"),
+        period,
+        group,
+        winnerName: winner?.full_name ?? null,
+        winnerShareNumber: winnerShare?.share_number ?? null,
+        status: periodStatus(period),
       }
     })
 
-    const receiptTasks = dashboard.openReceipts
-      .slice(0, 8)
-      .map((receipt) => {
-        const net =
-          Number(receipt.source_total_pay || 0) -
-          Number(receipt.source_total_receive || 0) +
-          Number(receipt.settlement_amount || 0)
+    return {
+      todayPeriods,
+      completedPeriods,
+      pendingPeriods,
+      todayReceipts,
+      remainingCollect,
+      remainingPay,
+      openCollectCount,
+      openPayCount,
+      cards,
+    }
+  }, [
+    groups,
+    members,
+    payments,
+    periods,
+    receipts,
+    shares,
+    today,
+  ])
 
-        return {
-          key: `receipt-${receipt.id}`,
-          icon: AlertCircle,
-          iconClass: "text-status-yellow-fg",
-          text:
-            net >= 0
-              ? `Có phiếu cần thu/đối chiếu ${formatVND(Math.abs(net))}`
-              : `Có phiếu cần chi/đối chiếu ${formatVND(Math.abs(net))}`,
-          action: () => onNavigate("phieu"),
-        }
-      })
+  const progress =
+    dashboard.todayPeriods.length > 0
+      ? Math.round(
+          (dashboard.completedPeriods.length /
+            dashboard.todayPeriods.length) *
+            100,
+        )
+      : 0
 
-    return [...periodTasks, ...receiptTasks]
-  }, [dashboard, onNavigate])
+  const taskCount =
+    (dashboard.pendingPeriods.length > 0 ? 1 : 0) +
+    (dashboard.openCollectCount > 0 ? 1 : 0) +
+    (dashboard.openPayCount > 0 ? 1 : 0)
 
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
         <LoaderCircle className="size-5 animate-spin" />
-        Đang tải Tổng quan...
+        Đang tải Hôm nay...
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="mx-auto max-w-6xl p-4 md:p-6">
+      <div className="mx-auto max-w-7xl p-4 md:p-6">
         <Card className="flex flex-col items-center gap-3 p-8 text-center">
-          <p className="font-medium text-destructive">{error}</p>
-          <Button variant="outline" onClick={() => void loadData()}>
+          <p className="font-medium text-destructive">
+            {error}
+          </p>
+
+          <Button
+            variant="outline"
+            onClick={() => void loadData()}
+          >
             <RefreshCw className="size-4" />
             Thử lại
           </Button>
@@ -390,301 +416,416 @@ export function TongQuanPage({ onNavigate }: Props) {
     )
   }
 
-  const stats = [
-    {
-      label: "Hụi viên",
-      value: dashboard.activeMembers,
-      icon: Users,
-      sub: "đang hoạt động",
-      onClick: () => onNavigate("huivien"),
-      urgent: false,
-    },
-    {
-      label: "Dây hoạt động",
-      value: dashboard.activeGroups.length,
-      icon: Layers,
-      sub: `${dashboard.groupProgress.reduce(
-        (sum, item) => sum + item.completed,
-        0,
-      )} kỳ đã chốt`,
-      onClick: () => onNavigate("day"),
-      urgent: false,
-    },
-    {
-      label: "Khui hôm nay",
-      value: dashboard.periodsToday.length,
-      icon: Flame,
-      sub:
-        dashboard.pendingToday.length > 0
-          ? `${dashboard.pendingToday.length} kỳ chưa khui`
-          : dashboard.periodsToday.length > 0
-            ? "Đã xử lý hết"
-            : "Không có kỳ",
-      onClick: () => onNavigate("khui"),
-      urgent: dashboard.pendingToday.length > 0,
-    },
-    {
-      label: "Phiếu còn xử lý",
-      value: dashboard.openReceipts.length,
-      icon: FileText,
-      sub:
-        dashboard.openReceipts.length > 0
-          ? "Có phiếu mở / một phần"
-          : "Không có phiếu tồn",
-      onClick: () => onNavigate("phieu"),
-      urgent: dashboard.openReceipts.length > 0,
-    },
-  ]
-
   return (
-    <div className="mx-auto max-w-6xl space-y-5 p-4 md:p-6">
+    <div className="mx-auto max-w-7xl space-y-5 p-4 md:p-6">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold md:text-2xl">Tổng quan</h1>
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold md:text-2xl">
+            Hôm nay
+          </h1>
+
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Ngày {formatDate(today)} · dữ liệu thật từ Supabase
+            {formatDate(today)}
           </p>
         </div>
 
         <Button
           variant="outline"
           size="sm"
+          className="shrink-0"
           onClick={() => void loadData()}
         >
           <RefreshCw className="size-4" />
-          Làm mới
+          <span className="hidden sm:inline">Làm mới</span>
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <button
-            type="button"
-            key={stat.label}
-            onClick={stat.onClick}
-            className="min-w-0 text-left"
-          >
-            <Card
-              className={`h-full p-4 transition-shadow hover:shadow-md ${
-                stat.urgent
-                  ? "border-destructive/30 bg-destructive/5"
-                  : ""
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {stat.label}
-                  </p>
-                  <p
-                    className={`mt-1 text-3xl font-bold ${
-                      stat.urgent ? "text-destructive" : "text-primary"
-                    }`}
-                  >
-                    {stat.value}
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {stat.sub}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-secondary p-2">
-                  <stat.icon className="size-5 text-primary" />
-                </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <button
+          type="button"
+          onClick={() => onNavigate("khui")}
+          className="text-left"
+        >
+          <Card className="h-full p-4 transition-shadow hover:shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Dây khui hôm nay
+                </p>
+
+                <p className="mt-2 text-3xl font-bold tabular-nums">
+                  {dashboard.todayPeriods.length}
+                </p>
+
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {dashboard.completedPeriods.length} đã chốt ·{" "}
+                  {dashboard.pendingPeriods.length} chưa khui
+                </p>
               </div>
-            </Card>
-          </button>
-        ))}
+
+              <div className="rounded-md bg-primary/10 p-2 text-primary">
+                <CalendarDays className="size-5" />
+              </div>
+            </div>
+          </Card>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onNavigate("phieu")}
+          className="text-left"
+        >
+          <Card className="h-full p-4 transition-shadow hover:shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Còn phải thu
+                </p>
+
+                <p className="mt-2 break-words text-2xl font-bold tabular-nums text-emerald-600 md:text-3xl">
+                  + {formatVND(dashboard.remainingCollect)}
+                </p>
+
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {dashboard.todayReceipts.length === 0
+                    ? "Chưa phát hành phiếu"
+                    : dashboard.openCollectCount > 0
+                      ? `${dashboard.openCollectCount} phiếu chưa thu đủ`
+                      : "Đã thu đủ"}
+                </p>
+              </div>
+
+              <div className="rounded-md bg-emerald-50 p-2 text-emerald-600">
+                <ArrowDownLeft className="size-5" />
+              </div>
+            </div>
+          </Card>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onNavigate("phieu")}
+          className="text-left"
+        >
+          <Card className="h-full p-4 transition-shadow hover:shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Còn phải chi
+                </p>
+
+                <p className="mt-2 break-words text-2xl font-bold tabular-nums text-red-600 md:text-3xl">
+                  − {formatVND(dashboard.remainingPay)}
+                </p>
+
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {dashboard.todayReceipts.length === 0
+                    ? "Chưa phát hành phiếu"
+                    : dashboard.openPayCount > 0
+                      ? `${dashboard.openPayCount} phiếu chưa chi`
+                      : "Đã chi đủ"}
+                </p>
+              </div>
+
+              <div className="rounded-md bg-red-50 p-2 text-red-600">
+                <ArrowUpRight className="size-5" />
+              </div>
+            </div>
+          </Card>
+        </button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">Việc cần làm hôm nay</h2>
-              <p className="text-xs text-muted-foreground">
-                Kỳ chưa khui và phiếu còn xử lý
-              </p>
-            </div>
-            <span className="text-xs text-muted-foreground">
-              {tasks.length} mục
-            </span>
-          </div>
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <WalletCards className="size-5 text-primary" />
 
-          {tasks.length === 0 ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-              <CheckCircle2 className="size-4 text-status-green-fg" />
-              Không có việc cần xử lý.
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {tasks.map((task) => (
-                <button
-                  type="button"
-                  key={task.key}
-                  onClick={task.action}
-                  className="group flex w-full items-center gap-2.5 rounded-md px-3 py-2.5 text-left hover:bg-accent"
-                >
-                  <task.icon
-                    className={`size-4 shrink-0 ${task.iconClass}`}
-                  />
-                  <span className="min-w-0 flex-1 text-sm">
-                    {task.text}
-                  </span>
-                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                </button>
-              ))}
-            </div>
+          <h2 className="text-lg font-bold">
+            Việc cần xử lý
+          </h2>
+
+          {taskCount > 0 && (
+            <Badge variant="secondary">{taskCount}</Badge>
           )}
-        </Card>
+        </div>
 
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        {taskCount === 0 ? (
+          <Card className="flex items-center gap-3 p-4">
+            <CheckCircle2 className="size-5 shrink-0 text-emerald-600" />
+
             <div>
-              <h2 className="font-semibold">Tiến độ dây đang hoạt động</h2>
-              <p className="text-xs text-muted-foreground">
-                Chỉ tính các dây chưa kết thúc
+              <p className="font-semibold">
+                Không còn việc cần xử lý hôm nay
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Các kỳ và phiếu trong ngày đã hoàn tất.
               </p>
             </div>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {dashboard.pendingPeriods.length > 0 && (
+              <TaskRow
+                icon={Clock3}
+                title={`${dashboard.pendingPeriods.length} dây chưa khui`}
+                description="Chọn người hốt và giá thăm để chốt kỳ"
+                onClick={() => onNavigate("khui")}
+              />
+            )}
+
+            {dashboard.openCollectCount > 0 && (
+              <TaskRow
+                icon={ArrowDownLeft}
+                title={`${dashboard.openCollectCount} phiếu chưa thu đủ`}
+                description={`Còn phải thu ${formatVND(
+                  dashboard.remainingCollect,
+                )}`}
+                tone="collect"
+                onClick={() => onNavigate("phieu")}
+              />
+            )}
+
+            {dashboard.openPayCount > 0 && (
+              <TaskRow
+                icon={ArrowUpRight}
+                title={`${dashboard.openPayCount} phiếu chưa chi`}
+                description={`Còn phải chi ${formatVND(
+                  dashboard.remainingPay,
+                )}`}
+                tone="pay"
+                onClick={() => onNavigate("phieu")}
+              />
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-bold">
+            Dây khui hôm nay
+          </h2>
+
+          <Badge variant="secondary" className="tabular-nums">
+            {dashboard.completedPeriods.length}/
+            {dashboard.todayPeriods.length} dây đã chốt
+          </Badge>
+        </div>
+
+        {dashboard.todayPeriods.length > 0 && (
+          <Progress value={progress} className="h-1.5" />
+        )}
+
+        {dashboard.cards.length === 0 ? (
+          <Card className="flex flex-col items-center gap-2 p-8 text-center">
+            <CalendarDays className="size-8 text-muted-foreground" />
+
+            <p className="font-semibold">
+              Hôm nay không có dây cần khui
+            </p>
+
+            <p className="text-sm text-muted-foreground">
+              Bạn có thể xem danh sách các dây đang hoạt động ở mục
+              Dây hụi.
+            </p>
+
             <Button
-              variant="ghost"
-              size="sm"
+              variant="outline"
+              className="mt-2"
               onClick={() => onNavigate("day")}
             >
-              Xem tất cả
+              Xem Dây hụi
             </Button>
+          </Card>
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {dashboard.cards.map((item) => (
+              <TodayGroupCard
+                key={item.period.id}
+                item={item}
+                onOpen={() => onNavigate("khui")}
+              />
+            ))}
           </div>
-
-          {dashboard.groupProgress.length === 0 ? (
-            <p className="py-6 text-sm text-muted-foreground">
-              Chưa có dây đang hoạt động.
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {dashboard.groupProgress.slice(0, 8).map((item) => (
-                <button
-                  type="button"
-                  key={item.group.id}
-                  onClick={() => onNavigate("day")}
-                  className="w-full text-left"
-                >
-                  <div className="mb-1.5 flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Badge
-                        variant="outline"
-                        className="shrink-0 font-mono text-[10px]"
-                      >
-                        {item.group.code || "CHƯA-MÃ"}
-                      </Badge>
-                      <span className="truncate text-sm font-medium">
-                        {item.group.name}
-                      </span>
-                    </div>
-
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {item.completed}/{item.total}
-                    </span>
-                  </div>
-
-                  <Progress value={item.progress} className="h-2" />
-
-                  <div className="mt-1.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>
-                      {formatVND(item.group.contribution_amount)}/chân
-                    </span>
-                    <span>
-                      Kỳ tiếp:{" "}
-                      {item.nextPeriod
-                        ? formatDate(item.nextPeriod.scheduled_date)
-                        : "Chưa có"}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-
-      <Card className="p-4">
-        <div className="flex items-center gap-2">
-          <TrendingUp className="size-4 text-primary" />
-          <h2 className="font-semibold">Tóm tắt tiền thật</h2>
-        </div>
-
-        <p className="mt-1 text-xs text-muted-foreground">
-          Chỉ tính giao dịch đã xác nhận trong app; không phải số dư tài khoản
-          ngân hàng.
-        </p>
-
-        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <FinanceStat
-            icon={WalletCards}
-            label="Đã thu"
-            value={formatVND(dashboard.actualCollected)}
-          />
-          <FinanceStat
-            icon={WalletCards}
-            label="Đã chi"
-            value={formatVND(dashboard.actualPaid)}
-          />
-          <FinanceStat
-            icon={WalletCards}
-            label="Tiền thực đang giữ"
-            value={formatVND(dashboard.cashNet)}
-            strong
-          />
-          <FinanceStat
-            icon={AlertCircle}
-            label="Còn phải thu*"
-            value={formatVND(dashboard.remainingCollect)}
-          />
-          <FinanceStat
-            icon={AlertCircle}
-            label="Còn phải chi*"
-            value={formatVND(dashboard.remainingPay)}
-          />
-          <FinanceStat
-            icon={Coins}
-            label="Tiền thảo tích lũy"
-            value={formatVND(dashboard.totalFee)}
-            strong
-          />
-        </div>
-
-        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-          * “Còn phải thu/chi” ở Tổng quan chỉ dựa trên các phiếu đã được lưu
-          trong bảng phiếu. Bảng Cân đối vẫn là màn hình chính để đối chiếu
-          nghĩa vụ toàn bộ các kỳ.
-        </p>
-      </Card>
+        )}
+      </section>
     </div>
   )
 }
 
-function FinanceStat({
+function TaskRow({
   icon: Icon,
-  label,
-  value,
-  strong = false,
+  title,
+  description,
+  onClick,
+  tone = "normal",
 }: {
-  icon: typeof WalletCards
-  label: string
-  value: string
-  strong?: boolean
+  icon: React.ElementType
+  title: string
+  description: string
+  onClick: () => void
+  tone?: "normal" | "collect" | "pay"
 }) {
+  const iconClass =
+    tone === "collect"
+      ? "text-emerald-600"
+      : tone === "pay"
+        ? "text-red-600"
+        : "text-amber-600"
+
   return (
-    <div className="min-w-0 rounded-lg bg-muted/50 p-3">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon className="size-3.5" />
-        <span>{label}</span>
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full text-left"
+    >
+      <Card className="flex items-center gap-3 p-4 transition-shadow hover:shadow-sm">
+        <Icon className={`size-5 shrink-0 ${iconClass}`} />
+
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold">{title}</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {description}
+          </p>
+        </div>
+
+        <ChevronRight className="size-5 shrink-0 text-muted-foreground" />
+      </Card>
+    </button>
+  )
+}
+
+function TodayGroupCard({
+  item,
+  onOpen,
+}: {
+  item: {
+    period: PeriodRow
+    group: GroupRow
+    winnerName: string | null
+    winnerShareNumber: number | null
+    status: "pending" | "editing" | "completed"
+  }
+  onOpen: () => void
+}) {
+  const { period, group } = item
+
+  const time = formatTime(
+    period.scheduled_at ?? group.opening_time,
+  )
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant="outline"
+              className="font-mono text-xs"
+            >
+              {group.code || "CHƯA-MÃ"}
+            </Badge>
+
+            <p className="font-bold">{group.name}</p>
+          </div>
+
+          <p className="mt-1 text-sm text-muted-foreground">
+            Kỳ {period.period_number}/{group.total_shares}
+            {time ? ` · ${time}` : ""}
+          </p>
+        </div>
+
+        <PeriodStatusBadge status={item.status} />
       </div>
-      <p
-        className={`mt-1 break-words text-sm ${
-          strong ? "font-bold" : "font-semibold"
-        }`}
-      >
-        {value}
-      </p>
-    </div>
+
+      <div className="mt-4 border-t pt-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Mệnh giá
+            </p>
+
+            <p className="mt-1 text-xl font-bold tabular-nums">
+              {formatVND(group.contribution_amount)}
+            </p>
+          </div>
+
+          {item.status === "completed" && (
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">
+                Giá thăm
+              </p>
+              <p className="font-semibold tabular-nums">
+                {formatVND(period.bid_amount)}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {item.status === "completed" &&
+          item.winnerName && (
+            <div className="mt-3 rounded-md bg-muted/60 px-3 py-2">
+              <p className="text-xs text-muted-foreground">
+                Người hốt
+              </p>
+
+              <p className="mt-0.5 font-semibold">
+                {item.winnerName}
+                {item.winnerShareNumber
+                  ? ` · Chân ${item.winnerShareNumber}`
+                  : ""}
+              </p>
+            </div>
+          )}
+
+        <Button
+          className="mt-3"
+          variant={
+            item.status === "completed"
+              ? "outline"
+              : "default"
+          }
+          onClick={onOpen}
+        >
+          {item.status === "completed"
+            ? "Xem lại"
+            : item.status === "editing"
+              ? "Tiếp tục khui"
+              : "Khui dây này"}
+
+          <ChevronRight className="size-4" />
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+function PeriodStatusBadge({
+  status,
+}: {
+  status: "pending" | "editing" | "completed"
+}) {
+  if (status === "completed") {
+    return (
+      <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+        <CheckCircle2 className="mr-1 size-3.5" />
+        Đã chốt
+      </Badge>
+    )
+  }
+
+  if (status === "editing") {
+    return (
+      <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100">
+        <Clock3 className="mr-1 size-3.5" />
+        Đang khui
+      </Badge>
+    )
+  }
+
+  return (
+    <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+      <Clock3 className="mr-1 size-3.5" />
+      Chưa khui
+    </Badge>
   )
 }
