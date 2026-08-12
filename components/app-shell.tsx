@@ -6,7 +6,6 @@ import {
   Layers,
   Users,
   FileText,
-  Flame,
   Menu,
   X,
   BookOpen,
@@ -27,13 +26,42 @@ export type Page =
   | "candoi"
   | "caidat"
 
-const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
-  { id: "tongguan", label: "Tổng quan", icon: LayoutDashboard },
-  { id: "khui", label: "Khui hôm nay", icon: Flame },
-  { id: "day", label: "Dây hụi", icon: Layers },
-  { id: "huivien", label: "Hụi viên", icon: Users },
-  { id: "phieu", label: "Phiếu thu–chi", icon: FileText },
-  { id: "candoi", label: "Cân đối tiền", icon: Scale },
+const NAV_ITEMS: {
+  id: Page
+  label: string
+  shortLabel: string
+  icon: React.ElementType
+}[] = [
+  {
+    id: "tongguan",
+    label: "Hôm nay",
+    shortLabel: "Hôm nay",
+    icon: LayoutDashboard,
+  },
+  {
+    id: "day",
+    label: "Dây hụi",
+    shortLabel: "Dây hụi",
+    icon: Layers,
+  },
+  {
+    id: "huivien",
+    label: "Hụi viên",
+    shortLabel: "H.viên",
+    icon: Users,
+  },
+  {
+    id: "phieu",
+    label: "Phiếu",
+    shortLabel: "Phiếu",
+    icon: FileText,
+  },
+  {
+    id: "candoi",
+    label: "Cân đối",
+    shortLabel: "Cân đối",
+    icon: Scale,
+  },
 ]
 
 interface Props {
@@ -42,7 +70,11 @@ interface Props {
   children: React.ReactNode
 }
 
-export function AppShell({ page, onNavigate, children }: Props) {
+export function AppShell({
+  page,
+  onNavigate,
+  children,
+}: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   async function handleLogout() {
@@ -57,14 +89,21 @@ export function AppShell({ page, onNavigate, children }: Props) {
 
   return (
     <div className="flex h-screen overflow-hidden">
+      {/* Desktop sidebar */}
       <aside className="hidden w-56 shrink-0 flex-col bg-sidebar text-sidebar-foreground md:flex">
         <div className="flex items-center gap-2 border-b border-sidebar-border px-4 py-5">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary-foreground/10">
             <BookOpen className="h-4 w-4 text-sidebar-foreground" />
           </div>
-          <span className="text-base font-semibold tracking-tight text-sidebar-foreground">
-            Sổ Hụi
-          </span>
+
+          <div className="min-w-0">
+            <p className="truncate text-base font-semibold tracking-tight text-sidebar-foreground">
+              Sổ Hụi
+            </p>
+            <p className="truncate text-[11px] text-sidebar-foreground/50">
+              Sổ tiền hằng ngày
+            </p>
+          </div>
         </div>
 
         <nav className="flex-1 space-y-0.5 px-2 py-3">
@@ -80,23 +119,32 @@ export function AppShell({ page, onNavigate, children }: Props) {
 
         <div className="border-t border-sidebar-border p-2">
           <NavButton
-            item={{ id: "caidat", label: "Cài đặt", icon: Settings }}
+            item={{
+              id: "caidat",
+              label: "Cài đặt",
+              shortLabel: "Cài đặt",
+              icon: Settings,
+            }}
             active={page === "caidat"}
             onClick={() => navigate("caidat")}
           />
+
           <button
+            type="button"
             onClick={handleLogout}
             className="flex w-full items-center gap-2.5 rounded-md px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
           >
             <LogOut className="size-4" />
             Đăng xuất
           </button>
+
           <p className="px-3 pt-1 text-xs text-sidebar-foreground/40">
             v1.0 • Sổ Hụi
           </p>
         </div>
       </aside>
 
+      {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-foreground/50 md:hidden"
@@ -104,17 +152,23 @@ export function AppShell({ page, onNavigate, children }: Props) {
         />
       )}
 
+      {/* Mobile slide menu */}
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 md:hidden",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          sidebarOpen
+            ? "translate-x-0"
+            : "-translate-x-full",
         )}
       >
         <div className="flex items-center justify-between border-b border-sidebar-border px-4 py-4">
           <div className="flex items-center gap-2">
             <BookOpen className="h-5 w-5 text-sidebar-foreground" />
-            <span className="text-base font-semibold">Sổ Hụi</span>
+            <span className="text-base font-semibold">
+              Sổ Hụi
+            </span>
           </div>
+
           <Button
             variant="ghost"
             size="icon"
@@ -139,12 +193,19 @@ export function AppShell({ page, onNavigate, children }: Props) {
 
         <div className="border-t border-sidebar-border p-2">
           <NavButton
-            item={{ id: "caidat", label: "Cài đặt", icon: Settings }}
+            item={{
+              id: "caidat",
+              label: "Cài đặt",
+              shortLabel: "Cài đặt",
+              icon: Settings,
+            }}
             active={page === "caidat"}
             onClick={() => navigate("caidat")}
             mobile
           />
+
           <button
+            type="button"
             onClick={handleLogout}
             className="flex w-full items-center gap-2.5 rounded-md px-3 py-3 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
           >
@@ -154,45 +215,49 @@ export function AppShell({ page, onNavigate, children }: Props) {
         </div>
       </aside>
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Mobile header */}
         <header className="flex shrink-0 items-center justify-between bg-primary px-4 py-3 text-primary-foreground md:hidden">
-          <div className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5" />
-            <span className="font-semibold">Sổ Hụi</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <BookOpen className="h-5 w-5 shrink-0" />
+            <span className="truncate font-semibold">
+              Sổ Hụi
+            </span>
           </div>
+
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-primary-foreground hover:bg-primary-foreground/10"
+            className="h-8 w-8 shrink-0 text-primary-foreground hover:bg-primary-foreground/10"
             onClick={() => setSidebarOpen(true)}
+            aria-label="Mở menu"
           >
             <Menu className="h-5 w-5" />
           </Button>
         </header>
 
-        <main className="flex-1 overflow-y-auto bg-background">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-background pb-16 md:pb-0">
+          {children}
+        </main>
 
-        <nav className="flex shrink-0 border-t border-border bg-card md:hidden">
-          {NAV_ITEMS.slice(0, 5).map((item) => (
+        {/* Mobile bottom navigation */}
+        <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-card md:hidden">
+          {NAV_ITEMS.map((item) => (
             <button
+              type="button"
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => navigate(item.id)}
               className={cn(
-                "flex flex-1 flex-col items-center gap-0.5 py-2 text-xs font-medium transition-colors",
-                page === item.id ? "text-primary" : "text-muted-foreground",
+                "flex min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-medium transition-colors",
+                page === item.id
+                  ? "text-primary"
+                  : "text-muted-foreground",
               )}
             >
-              <item.icon className="h-5 w-5" />
-              <span className="text-center text-[10px] leading-tight">
-                {item.id === "tongguan"
-                  ? "T.quan"
-                  : item.id === "khui"
-                    ? "Khui"
-                    : item.id === "day"
-                      ? "Dây hụi"
-                      : item.id === "huivien"
-                        ? "H.viên"
-                        : "Phiếu"}
+              <item.icon className="h-5 w-5 shrink-0" />
+
+              <span className="w-full truncate text-center text-[10px] leading-tight">
+                {item.shortLabel}
               </span>
             </button>
           ))}
@@ -208,13 +273,19 @@ function NavButton({
   onClick,
   mobile = false,
 }: {
-  item: { id: Page; label: string; icon: React.ElementType }
+  item: {
+    id: Page
+    label: string
+    shortLabel?: string
+    icon: React.ElementType
+  }
   active: boolean
   onClick: () => void
   mobile?: boolean
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-md px-3 text-left text-sm font-medium transition-colors",
@@ -225,7 +296,7 @@ function NavButton({
       )}
     >
       <item.icon className="h-4 w-4 shrink-0" />
-      {item.label}
+      <span className="truncate">{item.label}</span>
     </button>
   )
 }
