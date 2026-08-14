@@ -7,13 +7,16 @@ import {
   CalendarRange,
   CheckCheck,
   Coins,
+  Info,
   LoaderCircle,
   RefreshCw,
   Search,
+  ShieldAlert,
   Users,
   WalletCards,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
+import { AppPage, ErrorState, LoadingState, PageHeader, SectionHeader, StatusBadge } from "@/components/hui-design"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -764,42 +767,45 @@ export function CanDoiPage() {
   )
 
   if (loading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang tính bảng cân đối...
-      </div>
-    )
+    return <LoadingState label="Đang tính bảng cân đối..." />
   }
 
   if (error) {
     return (
-      <div className="mx-auto max-w-4xl p-4 md:p-6">
-        <Card className="flex flex-col items-center gap-3 p-8 text-center">
-          <p className="font-medium text-destructive">{error}</p>
-          <Button variant="outline" onClick={() => void loadData()}>
+      <AppPage>
+        <ErrorState description={error} action={<Button variant="outline" onClick={() => void loadData()}>
             <RefreshCw className="size-4" />
             Thử lại
-          </Button>
-        </Card>
-      </div>
+          </Button>} />
+      </AppPage>
     )
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-4 md:p-6">
-      <div>
-        <div className="flex items-center gap-2">
-          <WalletCards className="size-5" />
-          <h1 className="text-xl font-bold">Cân đối tiền hụi</h1>
+    <AppPage>
+      <PageHeader
+        title="Cân đối tiền hụi"
+        subtitle="So sánh tiền phải thu/chi theo kỳ hụi với tiền đã xác nhận thực tế."
+        leading={<WalletCards className="mt-0.5 size-5 text-primary" />}
+      />
+
+      <Card className="flex items-start gap-3 border-primary/20 bg-primary-soft p-4">
+        <Info className="mt-0.5 size-5 shrink-0 text-primary" />
+        <div>
+          <p className="font-bold text-foreground">Số liệu dùng để đối chiếu</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Nghiệp vụ Cân đối đang được hoàn thiện; số liệu hiện tại dùng để đối chiếu.
+          </p>
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          So sánh tiền phải thu/chi theo kỳ hụi với tiền đã xác nhận thực tế.
-        </p>
-      </div>
+      </Card>
 
       <Card className="p-4">
-        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+        <SectionHeader
+          title="Khoảng thời gian đối chiếu"
+          description="Thay đổi bộ lọc chỉ tải lại số liệu hiển thị."
+          icon={CalendarRange}
+        />
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Từ ngày
             <Input
@@ -828,13 +834,11 @@ export function CanDoiPage() {
 
 
       <Card className="p-4">
-        <div>
-          <h2 className="font-bold">Các dây đang hoạt động</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Chỉ hiển thị dây đang hoạt động. Dây đã đóng/kết thúc không đưa vào
-            bảng cân đối hiện tại.
-          </p>
-        </div>
+        <SectionHeader
+          title="Các dây đang hoạt động"
+          description="Dây đã đóng/kết thúc không đưa vào bảng đối chiếu hiện tại."
+          icon={WalletCards}
+        />
 
         {activeGroupSummary.length === 0 ? (
           <p className="mt-4 text-sm text-muted-foreground">
@@ -883,12 +887,13 @@ export function CanDoiPage() {
         )}
       </Card>
 
-      <Card className="p-4">
+      <Card className="border-danger/30 bg-danger-soft/50 p-4 shadow-[var(--shadow-floating)]">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <CheckCheck className="size-5" />
-              <h2 className="font-bold">Chốt nhanh dữ liệu cũ theo kỳ</h2>
+              <ShieldAlert className="size-5 text-danger" />
+              <h2 className="font-bold text-danger">Chốt nhanh dữ liệu cũ theo kỳ</h2>
+              <StatusBadge label="Ghi dữ liệu" tone="danger" />
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               Dùng cho các kỳ cũ mà bạn chắc chắn đã thu đủ và chi đủ.
@@ -906,7 +911,7 @@ export function CanDoiPage() {
             {quickPeriods.map((item) => (
               <div
                 key={item.period.id}
-                className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-3 rounded-lg border border-danger/20 bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -925,7 +930,7 @@ export function CanDoiPage() {
 
                 <Button
                   size="sm"
-                  variant={item.settled ? "outline" : "default"}
+                  variant={item.settled ? "outline" : "destructive"}
                   disabled={
                     item.settled ||
                     bulkWorkingPeriodId === item.period.id
@@ -946,7 +951,8 @@ export function CanDoiPage() {
         )}
 
         <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-          Nút này ghi nhận cả phía thu và phía chi của riêng kỳ được chọn.
+          Đây là thao tác ghi dữ liệu thật, không phải bộ lọc. Nút này ghi nhận
+          cả phía thu và phía chi của riêng kỳ được chọn.
           Chủ hụi/admin nếu có chân trong dây vẫn được tính như hụi viên bình thường.
           Không dùng nút này cho kỳ còn nợ hoặc còn thiếu tiền.
         </p>
@@ -1180,7 +1186,7 @@ export function CanDoiPage() {
         Tâm hoặc bất kỳ admin nào có chân trong dây hụi, các chân đó được tính
         thu/chi giống hệt mọi hụi viên khác.
       </Card>
-    </div>
+    </AppPage>
   )
 }
 

@@ -24,6 +24,16 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import {
+  HuiEmptyState,
+  HuiPage,
+  HuiPageHeader,
+  HuiStatCard,
+  HuiStatusBadge,
+  HuiTableFrame,
+  huiTableCellClass,
+  huiTableHeadClass,
+} from "@/components/hui-design"
 import { createClient } from "@/lib/supabase/client"
 
 export type Member = {
@@ -209,27 +219,23 @@ function riskMeta(level: RiskLevel) {
   if (level === "very_high") {
     return {
       label: "Rủi ro rất cao",
-      className: "bg-destructive/10 text-destructive",
       Icon: ShieldAlert,
     }
   }
   if (level === "high") {
     return {
       label: "Rủi ro cao",
-      className: "bg-status-red-bg text-status-red-fg",
       Icon: AlertTriangle,
     }
   }
   if (level === "watch") {
     return {
       label: "Cần chú ý",
-      className: "bg-status-yellow-bg text-status-yellow-fg",
       Icon: AlertTriangle,
     }
   }
   return {
     label: "Bình thường",
-    className: "bg-status-green-bg text-status-green-fg",
     Icon: ShieldCheck,
   }
 }
@@ -505,7 +511,6 @@ export function HuiVienPage() {
       ) {
         risk = "very_high"
       } else if (
-        risk !== "very_high" &&
         deadShares >= 2 &&
         futureObligation >= 20_000_000
       ) {
@@ -592,38 +597,37 @@ export function HuiVienPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">Hụi viên</h1>
-          <p className="text-sm text-muted-foreground">
-            {members.length} người · theo dõi chân hụi và mức rủi ro
-          </p>
-        </div>
-        <Button onClick={() => setEditing(null)}>
-          <Plus className="size-4" />
-          Thêm hụi viên
-        </Button>
-      </div>
+    <HuiPage wide className="flex flex-col">
+      <HuiPageHeader
+        title="Hụi viên"
+        subtitle={`${members.length} người · Theo dõi chân hụi, công nợ và mức rủi ro`}
+        actions={
+          <Button className="h-10 px-4 font-semibold" onClick={() => setEditing(null)}>
+            <Plus className="size-4" />
+            <span className="hidden sm:inline">Thêm hụi viên</span>
+            <span className="sm:hidden">Thêm</span>
+          </Button>
+        }
+      />
 
-      <div className="relative">
+      <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           aria-label="Tìm hụi viên"
           placeholder="Tìm theo tên hoặc SĐT..."
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          className="h-9 pl-9"
+          className="h-11 pl-9"
         />
       </div>
 
       {error && (
         <Card
-          className="flex items-center justify-between gap-3 border-destructive/30 p-4 text-sm text-destructive"
+          className="flex flex-row items-center justify-between gap-3 rounded-lg border-destructive/30 p-4 text-sm text-destructive"
           role="alert"
         >
           <span>{error}</span>
-          <Button variant="outline" size="sm" onClick={() => void loadData()}>
+          <Button className="h-9" variant="outline" size="sm" onClick={() => void loadData()}>
             Thử lại
           </Button>
         </Card>
@@ -631,30 +635,35 @@ export function HuiVienPage() {
 
       {loading ? (
         <div
-          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
+          className="flex items-center justify-center gap-2 py-16 text-sm font-medium text-muted-foreground"
           role="status"
         >
           <LoaderCircle className="size-5 animate-spin" />
           Đang tải hụi viên...
         </div>
       ) : filteredProfiles.length === 0 ? (
-        <Card className="flex flex-col items-center gap-2 p-10 text-center">
-          <UserRound className="size-8 text-muted-foreground" />
-          <p className="font-medium">
-            {query ? "Không tìm thấy hụi viên" : "Chưa có hụi viên"}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {query
+        <HuiEmptyState
+          icon={UserRound}
+          title={query ? "Không tìm thấy hụi viên" : "Chưa có hụi viên"}
+          description={
+            query
               ? "Thử tìm bằng tên hoặc số điện thoại khác."
-              : "Thêm hụi viên đầu tiên để bắt đầu."}
-          </p>
-        </Card>
+              : "Thêm hụi viên đầu tiên để bắt đầu."
+          }
+          action={
+            !query ? (
+              <Button className="h-10" onClick={() => setEditing(null)}>
+                <Plus className="size-4" /> Thêm hụi viên
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <>
-          <Card className="hidden md:block">
-            <div className="w-full overflow-x-auto">
+          <div className="hidden md:block">
+            <HuiTableFrame>
               <table className="min-w-[980px] w-full text-sm">
-                <thead className="bg-muted/50">
+                <thead>
                   <tr>
                     {[
                       "Họ tên",
@@ -666,7 +675,7 @@ export function HuiVienPage() {
                     ].map((heading) => (
                       <th
                         key={heading}
-                        className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                        className={huiTableHeadClass}
                       >
                         {heading}
                       </th>
@@ -682,12 +691,12 @@ export function HuiVienPage() {
                     return (
                       <tr
                         key={member.id}
-                        className="cursor-pointer hover:bg-muted/30"
+                        className="cursor-pointer transition-colors hover:bg-secondary/70 focus-within:bg-secondary/70"
                         onClick={() => setSelectedMemberId(member.id)}
                       >
-                        <td className="whitespace-nowrap px-4 py-3">
+                        <td className={`${huiTableCellClass} whitespace-nowrap`}>
                           <button
-                            className="text-left font-medium hover:underline"
+                            className="text-left font-bold hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             onClick={(event) => {
                               event.stopPropagation()
                               setSelectedMemberId(member.id)
@@ -697,7 +706,7 @@ export function HuiVienPage() {
                           </button>
                         </td>
 
-                        <td className="px-4 py-3 text-muted-foreground">
+                        <td className={`${huiTableCellClass} text-muted-foreground`}>
                           <div className="min-w-[150px]">
                             <p className="whitespace-nowrap">
                               ĐT: {member.phone || "—"}
@@ -708,20 +717,19 @@ export function HuiVienPage() {
                           </div>
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
+                        <td className={`${huiTableCellClass} whitespace-nowrap text-muted-foreground`}>
                           {member.bank_name || "—"}
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
-                          >
-                            <meta.Icon className="size-3.5" />
-                            {meta.label}
-                          </span>
+                        <td className={`${huiTableCellClass} whitespace-nowrap`}>
+                          <HuiStatusBadge
+                            label={meta.label}
+                            icon={meta.Icon}
+                            tone={profile.risk === "normal" ? "success" : profile.risk === "watch" ? "warning" : "danger"}
+                          />
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3">
+                        <td className={`${huiTableCellClass} whitespace-nowrap`}>
                           <button
                             onClick={(event) => {
                               event.stopPropagation()
@@ -729,15 +737,15 @@ export function HuiVienPage() {
                             }}
                             className={
                               member.is_active
-                                ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
-                                : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
+                                ? "rounded-md border border-transparent bg-status-green px-2 py-1 text-xs font-bold text-status-green-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                : "rounded-md border border-border bg-muted px-2 py-1 text-xs font-bold text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             }
                           >
                             {member.is_active ? "Hoạt động" : "Tạm ngưng"}
                           </button>
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3">
+                        <td className={`${huiTableCellClass} whitespace-nowrap`}>
                           <div className="flex min-w-[190px] items-center gap-1">
                             <Button
                               variant="ghost"
@@ -768,10 +776,10 @@ export function HuiVienPage() {
                   })}
                 </tbody>
               </table>
-            </div>
-          </Card>
+            </HuiTableFrame>
+          </div>
 
-          <div className="flex flex-col gap-2 md:hidden">
+          <div className="grid gap-3 md:hidden sm:grid-cols-2">
             {filteredProfiles.map((profile) => {
               const member = profile.member
               const meta = riskMeta(profile.risk)
@@ -779,12 +787,12 @@ export function HuiVienPage() {
               return (
                 <Card
                   key={member.id}
-                  className="cursor-pointer p-4"
+                  className="cursor-pointer gap-0 rounded-lg p-4 transition-colors hover:bg-secondary/40"
                   onClick={() => setSelectedMemberId(member.id)}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-semibold">
+                      <p className="truncate text-base font-bold">
                         {member.full_name}
                       </p>
                       <p className="text-sm text-muted-foreground">
@@ -800,12 +808,11 @@ export function HuiVienPage() {
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
-                    >
-                      <meta.Icon className="size-3.5" />
-                      {meta.label}
-                    </span>
+                    <HuiStatusBadge
+                      label={meta.label}
+                      icon={meta.Icon}
+                      tone={profile.risk === "normal" ? "success" : profile.risk === "watch" ? "warning" : "danger"}
+                    />
 
                     <button
                       onClick={(event) => {
@@ -814,8 +821,8 @@ export function HuiVienPage() {
                       }}
                       className={
                         member.is_active
-                          ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
-                          : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
+                          ? "rounded-md border border-transparent bg-status-green px-2 py-1 text-xs font-bold text-status-green-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          : "rounded-md border border-border bg-muted px-2 py-1 text-xs font-bold text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       }
                     >
                       {member.is_active ? "Hoạt động" : "Tạm ngưng"}
@@ -861,7 +868,7 @@ export function HuiVienPage() {
           }}
         />
       )}
-    </div>
+    </HuiPage>
   )
 }
 
@@ -877,43 +884,40 @@ function MemberProfilePage({
   const meta = riskMeta(profile.risk)
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
+    <HuiPage wide>
+      <HuiPageHeader
+        leading={
           <Button
             variant="ghost"
             size="icon"
             onClick={onBack}
-            className="shrink-0"
+            className="size-10 shrink-0"
+            aria-label="Về danh sách hụi viên"
           >
             <ArrowLeft className="size-4" />
           </Button>
-          <div className="min-w-0">
-            <h1 className="truncate text-xl font-bold">
-              {profile.member.full_name}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {profile.member.phone || "Chưa có SĐT"}
-            </p>
-          </div>
-        </div>
+        }
+        title={profile.member.full_name}
+        subtitle={`${profile.member.phone || "Chưa có SĐT"} · ${profile.groupCount} dây · ${profile.totalShares} chân`}
+        actions={
+          <Button className="h-10 font-semibold" variant="outline" onClick={onEdit}>
+            <Pencil className="size-4" /> Sửa
+          </Button>
+        }
+      />
 
-        <Button variant="outline" size="sm" onClick={onEdit}>
-          <Pencil className="size-4" />
-          Sửa
-        </Button>
-      </div>
-
-      <Card className="p-4">
+      <Card className="gap-0 rounded-lg p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-sm text-muted-foreground">Đánh giá hiện tại</p>
-            <span
-              className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold ${meta.className}`}
-            >
-              <meta.Icon className="size-4" />
-              {meta.label}
-            </span>
+            <div className="mt-1">
+              <HuiStatusBadge
+                className="min-h-8 px-3 text-sm"
+                label={meta.label}
+                icon={meta.Icon}
+                tone={profile.risk === "normal" ? "success" : profile.risk === "watch" ? "warning" : "danger"}
+              />
+            </div>
           </div>
 
           <div className="text-sm sm:max-w-xl">
@@ -926,14 +930,14 @@ function MemberProfilePage({
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <BigStat label="Số dây" value={String(profile.groupCount)} />
-        <BigStat label="Tổng chân" value={String(profile.totalShares)} />
-        <BigStat label="Chân sống" value={String(profile.liveShares)} />
-        <BigStat label="Chân chết / đã hốt" value={String(profile.deadShares)} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <HuiStatCard label="Số dây" value={profile.groupCount} tone="info" />
+        <HuiStatCard label="Tổng chân" value={profile.totalShares} />
+        <HuiStatCard label="Chân sống" value={profile.liveShares} tone="success" />
+        <HuiStatCard label="Chân chết / đã hốt" value={profile.deadShares} tone="warning" />
       </div>
 
-      <Card className="p-4">
+      <Card className="gap-0 rounded-lg p-4">
         <div className="flex items-center gap-2">
           <WalletCards className="size-5" />
           <h2 className="font-bold">Tiền đã ghi nhận trên hệ thống</h2>
@@ -959,21 +963,23 @@ function MemberProfilePage({
         </p>
       </Card>
 
-      <div>
-        <h2 className="font-bold">Các dây đang tham gia</h2>
+      <div className="border-b border-border pb-3">
+        <h2 className="text-base font-bold">Các dây đang tham gia</h2>
         <p className="text-sm text-muted-foreground">
           Chi tiết chân sống/chết và nghĩa vụ còn lại theo từng dây.
         </p>
       </div>
 
       {profile.groupStats.length === 0 ? (
-        <Card className="p-8 text-center text-sm text-muted-foreground">
-          Hụi viên này chưa có chân hoạt động trong dây nào.
-        </Card>
+        <HuiEmptyState
+          icon={UserRound}
+          title="Chưa tham gia dây hụi nào"
+          description="Hụi viên này chưa có chân hoạt động trong dây nào."
+        />
       ) : (
         <div className="space-y-3">
           {profile.groupStats.map((stat) => (
-            <Card key={stat.group.id} className="p-4">
+            <Card key={stat.group.id} className="gap-0 rounded-lg p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-semibold">{stat.group.name}</p>
@@ -1008,31 +1014,22 @@ function MemberProfilePage({
         </div>
       )}
 
-      <Card className="p-4 text-xs leading-relaxed text-muted-foreground">
+      <Card className="gap-0 rounded-lg border-dashed p-4 text-xs leading-relaxed text-muted-foreground">
         Cảnh báo là công cụ hỗ trợ quản trị, không phải kết luận về khả năng trả
         tiền của một người. Hệ thống tăng mức cảnh báo khi người chơi đã hốt
         nhiều chân, còn nghĩa vụ tương lai lớn và/hoặc đang thiếu khoản đã đến
         hạn.
       </Card>
-    </div>
+    </HuiPage>
   )
 }
 
 function SmallStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md bg-muted/50 p-2.5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold">{value}</p>
+    <div className="min-w-0 rounded-md bg-secondary p-2.5">
+      <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+      <p className="mt-1 overflow-x-auto whitespace-nowrap text-sm font-bold tabular-nums">{value}</p>
     </div>
-  )
-}
-
-function BigStat({ label, value }: { label: string; value: string }) {
-  return (
-    <Card className="p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-bold">{value}</p>
-    </Card>
   )
 }
 
@@ -1119,18 +1116,19 @@ function MemberDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 p-4"
+      className="hui-design-surface fixed inset-0 z-50 flex items-end justify-center bg-foreground/30 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <Card className="max-h-[90vh] w-full max-w-2xl overflow-y-auto p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">
-            {member ? "Sửa hụi viên" : "Thêm hụi viên"}
-          </h2>
+      <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-b-none rounded-t-xl p-4 shadow-2xl sm:rounded-xl sm:p-5">
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
+          <div>
+            <h2 className="text-lg font-bold">{member ? "Sửa hụi viên" : "Thêm hụi viên"}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Thông tin liên hệ và tài khoản nhận tiền.</p>
+          </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="size-4" />
           </Button>
@@ -1177,11 +1175,11 @@ function MemberDialog({
             </p>
           )}
 
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+          <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:justify-end">
+            <Button className="h-10" type="button" variant="outline" onClick={onClose}>
               Hủy
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button className="h-10" type="submit" disabled={saving}>
               {saving && <LoaderCircle className="size-4 animate-spin" />}
               Lưu
             </Button>

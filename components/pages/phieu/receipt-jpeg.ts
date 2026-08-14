@@ -1,4 +1,5 @@
 import type { Receipt, SettingsRow } from "./types"
+import { getReceiptCanvasFontFamily, RECEIPT_DESIGN } from "./receipt-design"
 import { formatDate, formatVND, receiptFileName, transferText, vietQrUrl } from "./utils"
 
 export function downloadFile(file: File) {
@@ -88,37 +89,11 @@ export async function createReceiptJpeg(
   date: string,
   settings: SettingsRow,
 ) {
-  const width = 1080
-  const margin = 54
+  const width = RECEIPT_DESIGN.canvas.width
+  const margin = RECEIPT_DESIGN.canvas.margin
   const contentWidth = width - margin * 2
-
-  const COLORS = {
-    background: "#fbfcfe",
-    white: "#ffffff",
-    strong: "#111c30",
-    navy: "#253553",
-    muted: "#738096",
-    border: "#dce3ed",
-    secondary: "#eef3f9",
-    mutedBg: "#f4f6f9",
-    collect: "#267a53",
-    collectSoft: "#eef8f2",
-    collectBorder: "#d4e9dc",
-    pay: "#b85050",
-    paySoft: "#fbf1f1",
-    payBorder: "#eed3d3",
-    live: "#34785c",
-    liveSoft: "#f0f7f3",
-    dead: "#9b5b5b",
-    deadSoft: "#faf2f2",
-  }
-
-  await document.fonts.ready
-
-  const bodyFont = getComputedStyle(document.body).fontFamily
-  const fontFamily = `'Be Vietnam Pro', ${
-    bodyFont || "'Inter', system-ui, sans-serif"
-  }`
+  const COLORS = RECEIPT_DESIGN.colors
+  const fontFamily = await getReceiptCanvasFontFamily()
 
   function font(weight: number, size: number) {
     return `${weight} ${size}px ${fontFamily}`
@@ -187,10 +162,28 @@ export async function createReceiptJpeg(
   canvas.width = width
   canvas.height = Math.ceil(canvasHeight)
 
-  const ctx = canvas.getContext("2d")
+  const canvasContext = canvas.getContext("2d")
 
-  if (!ctx) {
+  if (!canvasContext) {
     throw new Error("Trình duyệt không hỗ trợ Canvas")
+  }
+
+  const ctx: CanvasRenderingContext2D = canvasContext
+
+  function setFittedFont(
+    text: string,
+    weight: number,
+    preferredSize: number,
+    maxWidth: number,
+    minimumSize = 20,
+  ) {
+    let size = preferredSize
+    ctx.font = font(weight, size)
+
+    while (size > minimumSize && ctx.measureText(text).width > maxWidth) {
+      size -= 1
+      ctx.font = font(weight, size)
+    }
   }
 
   ctx.fillStyle = COLORS.background
@@ -202,8 +195,8 @@ export async function createReceiptJpeg(
     y: number,
     w: number,
     h: number,
-    fill = COLORS.white,
-    stroke = COLORS.border,
+    fill: string = COLORS.white,
+    stroke: string = COLORS.border,
     radius = 16,
   ) {
     ctx.fillStyle = fill
@@ -255,7 +248,7 @@ export async function createReceiptJpeg(
   }
 
   function drawPhoneIcon(cx: number, cy: number) {
-    ctx.fillStyle = COLORS.navy
+    ctx.fillStyle = COLORS.primary
     ctx.textAlign = "center"
     ctx.font = font(700, 29)
     ctx.fillText("☎", cx, cy + 10)
@@ -276,7 +269,7 @@ export async function createReceiptJpeg(
     ctx.fill()
 
     if (type === "person") {
-      drawPersonIcon(cx, cy, COLORS.navy)
+      drawPersonIcon(cx, cy, COLORS.primary)
     } else {
       drawPhoneIcon(cx, cy)
     }
@@ -288,7 +281,7 @@ export async function createReceiptJpeg(
 
     ctx.textAlign = "right"
     ctx.fillStyle = COLORS.strong
-    ctx.font = font(700, 29)
+    setFittedFont(value, 700, 29, contentWidth * 0.56, 21)
     ctx.fillText(value, width - margin - 20, rowY)
   }
 
@@ -309,7 +302,7 @@ export async function createReceiptJpeg(
 
     drawCard(x, y, w, h, fill, stroke, 14)
 
-    ctx.fillStyle = live ? "#e6f3ec" : "#f7eaea"
+    ctx.fillStyle = live ? COLORS.liveIcon : COLORS.deadIcon
     ctx.beginPath()
     ctx.arc(centerX, y + 30, 18, 0, Math.PI * 2)
     ctx.fill()
@@ -344,25 +337,31 @@ export async function createReceiptJpeg(
 
     ctx.textAlign = "right"
 
-    let valueColor = COLORS.strong
+    let valueColor: string = COLORS.strong
     if (options?.negative) valueColor = COLORS.pay
     if (options?.positive) valueColor = COLORS.collect
 
     ctx.fillStyle = valueColor
-    ctx.font = options?.strong ? font(800, 31) : font(700, 29)
+    setFittedFont(
+      value,
+      options?.strong ? 800 : 700,
+      options?.strong ? 31 : 29,
+      w * 0.58,
+      20,
+    )
     ctx.fillText(value, x + w, y)
   }
 
   let y = 92
 
   ctx.textAlign = "center"
-  ctx.fillStyle = COLORS.navy
+  ctx.fillStyle = COLORS.primary
   ctx.font = font(800, 47)
   ctx.fillText("PHIẾU HỤI", width / 2, y)
 
   y += 57
   ctx.fillStyle = COLORS.strong
-  ctx.font = font(700, 38)
+  setFittedFont(receipt.member.full_name, 700, 38, contentWidth - 80, 24)
   ctx.fillText(receipt.member.full_name, width / 2, y)
 
   y += 43
@@ -381,9 +380,9 @@ export async function createReceiptJpeg(
   let headline = "ĐÃ CÂN BẰNG"
   let amountText = formatVND(receipt.remainingAmount)
   let description = ""
-  let actionColor = COLORS.navy
-  let actionBg = COLORS.secondary
-  let actionBorder = COLORS.border
+  let actionColor: string = COLORS.primary
+  let actionBg: string = COLORS.secondary
+  let actionBorder: string = COLORS.border
 
   if (cancelled) {
     headline = "PHIẾU ĐÃ HỦY"
@@ -422,9 +421,9 @@ export async function createReceiptJpeg(
   const iconY = actionY + 74
 
   ctx.fillStyle = collect
-    ? "#e2f1e7"
+    ? COLORS.collectIcon
     : pay
-      ? "#f5dddd"
+      ? COLORS.payIcon
       : COLORS.mutedBg
   ctx.beginPath()
   ctx.arc(iconX, iconY, 48, 0, Math.PI * 2)
@@ -528,13 +527,13 @@ export async function createReceiptJpeg(
     ctx.fill()
     ctx.fillRect(margin + 2, cardY + 54, contentWidth - 4, 36)
 
-    ctx.textAlign = "left"
-    ctx.fillStyle = COLORS.strong
-    ctx.font = font(800, 29)
-
     const groupTitle = line.groupCode
       ? `${line.groupCode} · ${line.groupName}`
       : line.groupName
+
+    ctx.textAlign = "left"
+    ctx.fillStyle = COLORS.strong
+    setFittedFont(groupTitle, 800, 29, contentWidth - 300, 20)
 
     ctx.fillText(groupTitle, margin + 24, cardY + 40)
 
@@ -780,9 +779,10 @@ export async function createReceiptJpeg(
     ctx.drawImage(qrImage, qrX, qrY, qrWidth, qrHeight)
 
     ctx.fillStyle = COLORS.muted
-    ctx.font = font(400, 27)
+    const transferContent = `Nội dung: ${transferText(receipt, date)}`
+    setFittedFont(transferContent, 400, 27, contentWidth - 80, 18)
     ctx.fillText(
-      `Nội dung: ${transferText(receipt, date)}`,
+      transferContent,
       width / 2,
       qrY + qrHeight + 42,
     )

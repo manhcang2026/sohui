@@ -20,11 +20,11 @@ export function SummaryCard({
 }) {
   const valueClass =
     tone === "collect"
-      ? "text-emerald-700"
+      ? "text-success-foreground"
       : tone === "pay"
-        ? "text-red-600"
+        ? "text-danger-foreground"
         : tone === "done"
-          ? "text-emerald-700"
+          ? "text-success-foreground"
           : "text-foreground"
 
   return (
@@ -166,7 +166,7 @@ export function ReceiptMobileCard({
           </div>
 
           {receipt.status === "partial" && (
-            <p className="mt-2 text-sm font-medium text-amber-800">
+            <p className="mt-2 text-sm font-medium text-warning-foreground">
               Đã {receipt.direction === "collect" ? "thu" : "chi"}{" "}
               {formatVND(receipt.paidAmount)} · Còn {formatVND(receipt.remainingAmount)}
             </p>
@@ -215,8 +215,8 @@ export function DirectionBadge({ receipt }: { receipt: Receipt }) {
     <span
       className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
         receipt.direction === "collect"
-          ? "bg-emerald-100 text-emerald-700"
-          : "bg-red-100 text-red-600"
+          ? "bg-success-soft text-success-foreground"
+          : "bg-danger-soft text-danger-foreground"
       }`}
     >
       {receipt.direction === "collect" ? "Phải thu" : "Phải chi"}
@@ -227,12 +227,12 @@ export function DirectionBadge({ receipt }: { receipt: Receipt }) {
 export function PaymentBadge({ receipt }: { receipt: Receipt }) {
   const className =
     receipt.status === "paid"
-      ? "bg-emerald-100 text-emerald-700"
+      ? "bg-success-soft text-success-foreground"
       : receipt.status === "partial"
-        ? "bg-amber-100 text-amber-800"
+        ? "bg-warning-soft text-warning-foreground"
         : receipt.status === "cancelled"
           ? "bg-muted text-muted-foreground"
-          : "bg-amber-100 text-amber-800"
+          : "bg-warning-soft text-warning-foreground"
 
   return (
     <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${className}`}>
@@ -257,13 +257,13 @@ export function MiniShareBadge({
     <div
       className={`flex min-h-[92px] flex-col items-center justify-center rounded-lg border px-2 py-3 text-center ${
         live
-          ? "border-emerald-200 bg-emerald-50/60 text-emerald-700"
-          : "border-red-200 bg-red-50/60 text-red-600"
+          ? "border-success/25 bg-success-soft text-success-foreground"
+          : "border-danger/25 bg-danger-soft text-danger-foreground"
       }`}
     >
       <div
         className={`flex size-7 items-center justify-center rounded-full ${
-          live ? "bg-emerald-100" : "bg-red-100"
+          live ? "bg-success/10" : "bg-danger/10"
         }`}
       >
         {live ? (
@@ -296,8 +296,8 @@ export function ReceiptMoneyRow({
       <span
         className={
           strong
-            ? "font-bold text-[#0f2a56]"
-            : "text-slate-500"
+            ? "font-bold text-foreground"
+            : "text-muted-foreground"
         }
       >
         {label}
@@ -306,12 +306,12 @@ export function ReceiptMoneyRow({
       <span
         className={`shrink-0 text-right tabular-nums ${
           negative
-            ? "font-bold text-red-600"
+            ? "font-bold text-danger-foreground"
             : positive
-              ? "font-extrabold text-emerald-700"
+              ? "font-extrabold text-success-foreground"
               : strong
-                ? "font-extrabold text-[#0f2a56]"
-                : "font-bold text-slate-900"
+                ? "font-extrabold text-primary"
+                : "font-bold text-foreground"
         }`}
       >
         {value}

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import {
+  CheckCircle2,
   KeyRound,
   Layers,
   LoaderCircle,
@@ -12,9 +13,28 @@ import {
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { calculateGroupPerformance } from "@/lib/hui-performance"
-import { AccountSecurity } from "@/components/account/account-security"
+import { ChangePinForm } from "@/components/account/account-security"
+import {
+  AppPage,
+  EmptyState,
+  ErrorState,
+  HuiCodeBadge,
+  LoadingState,
+  MoneyValue,
+  PageHeader,
+  SectionHeader,
+  StatCard,
+  StatusBadge,
+} from "@/components/hui-design"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 type Profile = {
   auth_user_id: string
@@ -97,6 +117,8 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [showPin, setShowPin] = useState(false)
+  const [pinMessage, setPinMessage] = useState("")
+  const [pinError, setPinError] = useState("")
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -231,47 +253,43 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center gap-2">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang tải sổ hụi của bạn...
-      </div>
-    )
+    return <LoadingState label="Đang tải sổ hụi của bạn..." />
   }
 
   if (error) {
     return (
-      <div className="mx-auto max-w-xl p-4">
-        <Card className="p-6 text-center">
-          <p className="font-medium text-destructive">{error}</p>
-          <Button
-            className="mt-3"
+      <AppPage className="max-w-xl">
+        <ErrorState description={error} action={<Button
             variant="outline"
             onClick={() => void loadData()}
           >
             Thử lại
-          </Button>
-        </Card>
-      </div>
+          </Button>} />
+      </AppPage>
     )
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 p-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Sổ hụi của tôi</p>
-            <h1 className="font-bold">
-              {member?.full_name ?? profile.display_name ?? profile.email ?? "Hụi viên"}
-            </h1>
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-2.5">
+            <div className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
+              <Layers className="size-4" />
+            </div>
+            <div>
+              <p className="font-bold">Sổ Hụi</p>
+              <p className="text-xs text-muted-foreground">Cổng thông tin hụi viên</p>
+            </div>
           </div>
-
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setShowPin((value) => !value)}
+              onClick={() => {
+                setPinError("")
+                setShowPin(true)
+              }}
             >
               <KeyRound className="size-4" />
               Đổi mã
@@ -284,31 +302,51 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-4 p-4 md:p-6">
-        {showPin && <AccountSecurity />}
+      <AppPage className="max-w-5xl">
+        <PageHeader
+          title={member?.full_name ?? profile.display_name ?? "Hụi viên"}
+          subtitle={member?.phone ? `Số điện thoại: ${member.phone}` : "Tổng quan sổ hụi cá nhân"}
+        />
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Stat icon={Layers} label="Dây tham gia" value={summary.groupCount} />
-          <Stat icon={UserRound} label="Tổng chân" value={summary.totalShares} />
-          <Stat icon={UserRound} label="Chân sống" value={summary.liveShares} />
-          <Stat icon={UserRound} label="Chân đã hốt" value={summary.deadShares} />
+        {pinMessage && (
+          <Card className="flex items-center gap-2 border-success/25 bg-success-soft p-3 text-success-foreground">
+            <CheckCircle2 className="size-4 shrink-0" />
+            <p className="text-sm font-medium">{pinMessage}</p>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 min-[340px]:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Dây tham gia" value={summary.groupCount} tone="info" />
+          <StatCard label="Tổng chân" value={summary.totalShares} />
+          <StatCard label="Chân sống" value={summary.liveShares} tone="success" />
+          <StatCard label="Chân đã hốt" value={summary.deadShares} tone="warning" />
         </div>
 
         <Card className="p-4">
-          <div className="flex items-center gap-2">
-            <WalletCards className="size-5" />
-            <h2 className="font-semibold">Tiền đã xác nhận</h2>
-          </div>
+          <SectionHeader
+            title="Tiền đã xác nhận"
+            description="Tổng tiền thực tế đã được chủ hụi ghi nhận"
+            icon={WalletCards}
+          />
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <Money label="Đã đóng" value={summary.collected} />
-            <Money label="Đã nhận" value={summary.paid} />
+          <div className="mt-4 grid grid-cols-1 gap-3 min-[340px]:grid-cols-2">
+            <div className="min-w-0 rounded-lg border border-success/20 bg-success-soft p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-success-foreground">Đã đóng</p>
+              <MoneyValue amount={summary.collected} tone="collect" size="lg" className="mt-1 block max-w-full overflow-x-auto" />
+            </div>
+            <div className="min-w-0 rounded-lg border border-primary/20 bg-primary-soft p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary">Đã nhận</p>
+              <MoneyValue amount={summary.paid} tone="neutral" size="lg" className="mt-1 block max-w-full overflow-x-auto text-primary" />
+            </div>
           </div>
         </Card>
 
-        <div>
-          <h2 className="font-semibold">Các dây đang tham gia</h2>
-          <div className="mt-2 space-y-2">
+        <section className="space-y-3">
+          <SectionHeader title="Các dây đang tham gia" icon={Layers} />
+          {groups.every((group) => !shares.some((share) => share.group_id === group.id)) ? (
+            <EmptyState icon={Layers} title="Chưa tham gia dây hụi nào" />
+          ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
             {groups.map((group) => {
               const groupShares = shares.filter(
                 (share) => share.group_id === group.id,
@@ -331,11 +369,17 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
 
               return (
                 <Card key={group.id} className="p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-md border px-2 py-0.5 font-mono text-xs">
-                      {group.code || "CHƯA-MÃ"}
-                    </span>
-                    <p className="font-semibold">{group.name}</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <HuiCodeBadge code={group.code} />
+                      <p className="mt-2 break-words text-base font-bold leading-snug">
+                        {group.name}
+                      </p>
+                    </div>
+                    <StatusBadge
+                      label={group.status === "active" ? "Đang hoạt động" : group.status}
+                      tone={group.status === "active" ? "success" : "neutral"}
+                    />
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {formatVND(group.contribution_amount)}/chân ·{" "}
@@ -343,7 +387,7 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                   </p>
 
                   {performance && (
-                    <div className="mt-3 rounded-md bg-muted/50 p-3">
+                    <div className="mt-3 rounded-lg border border-border bg-muted/50 p-3">
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-3 text-left"
@@ -351,22 +395,19 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                           setExpandedGroupId(expanded ? null : group.id)
                         }
                       >
-                        <div>
+                        <div className="min-w-0">
                           <p className="text-xs text-muted-foreground">
                             Hiệu quả thăm hiện tại
                           </p>
-                          <p
-                            className={`mt-0.5 font-bold ${
-                              performance.performanceAmount < 0
-                                ? "text-destructive"
-                                : performance.performanceAmount > 0
-                                  ? "text-primary"
-                                  : ""
-                            }`}
-                          >
-                            {formatVND(performance.performanceAmount)}
-                            {performance.liveShares > 0 ? " · tạm tính" : ""}
-                          </p>
+                          <MoneyValue
+                            amount={Math.abs(performance.performanceAmount)}
+                            prefix={performance.performanceAmount < 0 ? "−" : performance.performanceAmount > 0 ? "+" : ""}
+                            tone={performance.performanceAmount < 0 ? "pay" : performance.performanceAmount > 0 ? "collect" : "neutral"}
+                            className="mt-0.5 block max-w-full overflow-x-auto"
+                          />
+                          {performance.liveShares > 0 && (
+                            <p className="mt-0.5 text-xs text-muted-foreground">Tạm tính theo kỳ hiện tại</p>
+                          )}
                         </div>
                         <span className="text-xs font-medium text-primary">
                           {expanded ? "Thu gọn" : "Xem chi tiết"}
@@ -441,15 +482,16 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
               )
             })}
           </div>
-        </div>
+          )}
+        </section>
 
-        <div>
-          <div className="flex items-center gap-2">
-            <ReceiptText className="size-5" />
-            <h2 className="font-semibold">Phiếu gần đây</h2>
-          </div>
+        <section className="space-y-3">
+          <SectionHeader title="Phiếu gần đây" icon={ReceiptText} />
 
-          <div className="mt-2 space-y-2">
+          {receipts.length === 0 ? (
+            <EmptyState icon={ReceiptText} title="Chưa có phiếu nào" />
+          ) : (
+          <div className="grid gap-3 md:grid-cols-2">
             {receipts.slice(0, 12).map((receipt) => {
               const activePayments = payments.filter(
                 (payment) =>
@@ -468,17 +510,19 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                 Number(receipt.settlement_amount || 0)
 
               return (
-                <Card key={receipt.id} className="p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium">
+                <Card key={receipt.id} className="p-4">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+                    <div className="min-w-0">
+                      <p className="font-bold">
                         {formatDate(receipt.receipt_date)}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        {receipt.status}
-                      </p>
+                      <StatusBadge
+                        label={receipt.status === "paid" ? "Đã thanh toán" : receipt.status === "open" ? "Đang mở" : receipt.status === "cancelled" ? "Đã hủy" : receipt.status}
+                        tone={receipt.status === "paid" ? "success" : receipt.status === "cancelled" ? "danger" : "warning"}
+                        className="mt-2"
+                      />
                     </div>
-                    <p className="font-bold">
+                    <p className="max-w-[12rem] break-words text-right text-sm font-bold tabular-nums sm:max-w-none">
                       {actuallyCollected > 0
                         ? `Đã đóng ${formatVND(actuallyCollected)}`
                         : actuallyPaid > 0
@@ -494,35 +538,33 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
               )
             })}
           </div>
-        </div>
-      </main>
-    </div>
-  )
-}
+          )}
+        </section>
 
-function Stat({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof Layers
-  label: string
-  value: number
-}) {
-  return (
-    <Card className="p-4">
-      <Icon className="size-4 text-muted-foreground" />
-      <p className="mt-2 text-xs text-muted-foreground">{label}</p>
-      <p className="text-xl font-bold">{value}</p>
-    </Card>
-  )
-}
-
-function Money({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md bg-muted/50 p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 font-bold">{formatVND(value)}</p>
+        <Dialog open={showPin} onOpenChange={setShowPin}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Đổi mã đăng nhập</DialogTitle>
+              <DialogDescription>
+                Tạo mã PIN mới gồm đúng 4 chữ số.
+              </DialogDescription>
+            </DialogHeader>
+            <ChangePinForm
+              onChanged={(message) => {
+                setPinMessage(message)
+                setPinError("")
+                setShowPin(false)
+              }}
+              onError={setPinError}
+            />
+            {pinError && (
+              <p className="text-sm text-destructive" role="alert">
+                {pinError}
+              </p>
+            )}
+          </DialogContent>
+        </Dialog>
+      </AppPage>
     </div>
   )
 }

@@ -16,6 +16,11 @@ import {
   LuckyWheelDialog,
   type LuckyWheelCandidate,
 } from "@/components/lucky-wheel-dialog"
+import {
+  BidAmountControl,
+  initialBidAmount,
+  validateBidAmount,
+} from "@/components/bid-amount-control"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -53,6 +58,7 @@ type GroupDetail = {
   id: string
   code: string | null
   name: string
+  contribution_amount: number
   fee_amount: number
   minimum_bid_amount: number
   bid_step_amount: number
@@ -73,17 +79,6 @@ function formatDate(value: string | null | undefined) {
   if (!value) return "—"
   const [year, month, day] = value.slice(0, 10).split("-")
   return `${day}/${month}/${year}`
-}
-
-function numericValue(value: string | null | undefined) {
-  const digits = String(value ?? "").replace(/\D/g, "")
-  return digits ? Number(digits) : 0
-}
-
-function formatMoneyInput(value: string | null | undefined) {
-  const digits = String(value ?? "").replace(/\D/g, "")
-  if (!digits) return ""
-  return new Intl.NumberFormat("vi-VN").format(Number(digits))
 }
 
 function isFinishedPeriod(status: string) {
@@ -146,6 +141,9 @@ export function PeriodResultDialog({
     useState<ReadonlyMap<string, MemberRow>>(membersById)
   const [checkingEligibility, setCheckingEligibility] =
     useState(true)
+  const [moneyLockState, setMoneyLockState] = useState<
+    "checking" | "locked" | "unlocked" | "unknown"
+  >("checking")
 
   useEffect(() => {
     let cancelled = false
@@ -246,6 +244,81 @@ export function PeriodResultDialog({
     }
   }, [day.id])
 
+  useEffect(() => {
+    let cancelled = false
+
+    async function checkActiveMoney() {
+      setMoneyLockState("checking")
+      const supabase = createClient()
+
+      try {
+        const { data: sourcePayments, error: sourceError } = await supabase
+          .from("receipt_payments")
+          .select("id")
+          .eq("status", "active")
+          .eq("source_period_id", period.id)
+          .limit(1)
+
+        if (sourceError) throw sourceError
+        if ((sourcePayments ?? []).length > 0) {
+          if (!cancelled) setMoneyLockState("locked")
+          return
+        }
+
+        const memberIds = [
+          ...new Set(day.shares.map((share) => share.member_id)),
+        ]
+        const receiptIds: string[] = []
+
+        for (let index = 0; index < memberIds.length; index += 100) {
+          const ids = memberIds.slice(index, index + 100)
+          if (ids.length === 0) continue
+
+          const { data, error } = await supabase
+            .from("hui_receipts")
+            .select("id")
+            .eq("receipt_date", period.scheduled_date)
+            .in("member_id", ids)
+
+          if (error) throw error
+          receiptIds.push(...(data ?? []).map((row) => row.id as string))
+        }
+
+        for (let index = 0; index < receiptIds.length; index += 100) {
+          const ids = receiptIds.slice(index, index + 100)
+          const { data, error } = await supabase
+            .from("receipt_payments")
+            .select("id")
+            .eq("status", "active")
+            .in("receipt_id", ids)
+            .limit(1)
+
+          if (error) throw error
+          if ((data ?? []).length > 0) {
+            if (!cancelled) setMoneyLockState("locked")
+            return
+          }
+        }
+
+        if (!cancelled) setMoneyLockState("unlocked")
+      } catch (caught) {
+        console.error("period money lock check:", caught)
+        if (!cancelled) {
+          setMoneyLockState("unknown")
+          setError(
+            "Không thể xác minh kỳ đã phát sinh tiền hay chưa. App tạm khóa chỉnh sửa; hãy đóng và thử lại.",
+          )
+        }
+      }
+    }
+
+    void checkActiveMoney()
+
+    return () => {
+      cancelled = true
+    }
+  }, [day.shares, period.id, period.scheduled_date])
+
   const previousWinnerIds = useMemo(
     () =>
       new Set(
@@ -308,10 +381,14 @@ export function PeriodResultDialog({
   const [winnerShareId, setWinnerShareId] = useState(
     period.winner_share_id ?? "",
   )
-  const [bidAmount, setBidAmount] = useState(
-    period.bid_amount
-      ? formatMoneyInput(String(period.bid_amount))
-      : "",
+  const [bidAmount, setBidAmount] = useState(() =>
+    initialBidAmount({
+      storedBid: period.bid_amount,
+      hasStoredResult:
+        isFinishedPeriod(period.status) ||
+        period.winner_share_id !== null,
+      minimumBid: Number(day.minimum_bid_amount ?? 0),
+    }),
   )
   const [openedAt, setOpenedAt] = useState(defaultOpenedAt)
   const [notes, setNotes] = useState(period.notes ?? "")
@@ -322,23 +399,9 @@ export function PeriodResultDialog({
   const minBid = Number(day.minimum_bid_amount ?? 0)
   const bidStep = Number(day.bid_step_amount ?? 0)
   const finished = isFinishedPeriod(period.status)
-
-  function validateBid(value: number) {
-    if (value < minBid) {
-      return `Giá thăm phải từ ${formatVND(minBid)} trở lên.`
-    }
-
-    if (
-      bidStep > 0 &&
-      (value - minBid) % bidStep !== 0
-    ) {
-      return `Giá thăm phải tăng theo bước ${formatVND(
-        bidStep,
-      )} từ mức ${formatVND(minBid)}.`
-    }
-
-    return ""
-  }
+  const locked =
+    period.scheduled_date < "2026-08-12" ||
+    moneyLockState !== "unlocked"
 
   function handleManualWinnerChange(shareId: string) {
     setWinnerShareId(shareId)
@@ -367,13 +430,26 @@ export function PeriodResultDialog({
     event.preventDefault()
     setError("")
 
+    if (locked) {
+      setError(
+        moneyLockState === "checking"
+          ? "Đang kiểm tra giao dịch tiền liên quan. Vui lòng chờ."
+          : "Kỳ đã có giao dịch tiền liên quan hoặc thuộc baseline lịch sử nên không thể sửa kết quả.",
+      )
+      return
+    }
+
     if (!winnerShareId) {
       setError("Bạn cần chọn chân hốt.")
       return
     }
 
-    const bid = numericValue(bidAmount)
-    const bidError = validateBid(bid)
+    const bidError = validateBidAmount({
+      value: bidAmount,
+      minimumBid: minBid,
+      bidStep,
+      contributionAmount: Number(day.contribution_amount ?? 0),
+    })
 
     if (bidError) {
       setError(bidError)
@@ -392,19 +468,18 @@ export function PeriodResultDialog({
         `${openedAt}:00+07:00`,
       ).toISOString()
 
-      const { error: updateError } =
-        await createClient()
-          .from("hui_periods")
-          .update({
-            winner_share_id: winnerShareId,
-            bid_amount: bid,
-            fee_amount: day.fee_amount,
-            opened_at: openedAtIso,
-            status: "completed",
-            notes: notes.trim() || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", period.id)
+      const { error: updateError } = await createClient().rpc(
+        "update_hui_period_result_atomic",
+        {
+          p_period_id: period.id,
+          p_winner_share_id: winnerShareId,
+          p_bid_amount: bidAmount,
+          p_fee_amount: day.fee_amount,
+          p_opened_at: openedAtIso,
+          p_status: "completed",
+          p_notes: notes.trim() || null,
+        },
+      )
 
       if (updateError) throw updateError
 
@@ -475,6 +550,7 @@ export function PeriodResultDialog({
                   size="sm"
                   className="gap-1.5"
                   disabled={
+                    locked ||
                     finished ||
                     checkingEligibility ||
                     wheelCandidates.length === 0
@@ -498,7 +574,8 @@ export function PeriodResultDialog({
               <select
                 id="period-result-winner"
                 required
-                className="mt-1.5 h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                disabled={locked}
+                className="mt-1.5 h-9 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-60"
                 value={winnerShareId}
                 onChange={(event) =>
                   handleManualWinnerChange(
@@ -533,35 +610,15 @@ export function PeriodResultDialog({
               </p>
             </div>
 
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Giá thăm thắng
-              <div className="relative">
-                <Input
-                  inputMode="numeric"
-                  required
-                  value={bidAmount}
-                  onChange={(event) =>
-                    setBidAmount(
-                      formatMoneyInput(
-                        event.target.value,
-                      ),
-                    )
-                  }
-                  placeholder={`Từ ${formatMoneyInput(
-                    String(minBid),
-                  )}đ`}
-                  className="pr-10"
-                />
-                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  đ
-                </span>
-              </div>
-              <span className="text-xs font-normal text-muted-foreground">
-                Tối thiểu {formatVND(minBid)}, bước{" "}
-                {formatVND(bidStep)}.
-              </span>
-            </label>
-
+            <BidAmountControl
+              value={bidAmount}
+              onChange={setBidAmount}
+              minimumBid={minBid}
+              bidStep={bidStep}
+              contributionAmount={Number(day.contribution_amount ?? 0)}
+              disabled={locked}
+              onInteraction={() => setError("")}
+            />
             <Card className="flex items-center justify-between gap-4 p-3">
               <p className="text-sm font-medium">
                 Tiền thảo
@@ -576,6 +633,7 @@ export function PeriodResultDialog({
               <Input
                 type="datetime-local"
                 required
+                disabled={locked}
                 value={openedAt}
                 onChange={(event) =>
                   setOpenedAt(event.target.value)
@@ -586,7 +644,8 @@ export function PeriodResultDialog({
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Ghi chú
               <textarea
-                className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                disabled={locked}
+                className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
                 value={notes}
                 onChange={(event) =>
                   setNotes(event.target.value)
@@ -615,7 +674,7 @@ export function PeriodResultDialog({
 
               <Button
                 type="submit"
-                disabled={saving}
+                disabled={saving || locked}
               >
                 {saving && (
                   <LoaderCircle className="size-4 animate-spin" />

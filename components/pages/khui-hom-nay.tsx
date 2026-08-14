@@ -16,17 +16,21 @@ import {
   Dices,
   LoaderCircle,
   LockKeyhole,
-  Minus,
-  Plus,
   RefreshCw,
   Sparkles,
   X,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
+import { AppPage, LoadingState, PageHeader } from "@/components/hui-design"
 import {
   LuckyWheelDialog,
   type LuckyWheelCandidate,
 } from "@/components/lucky-wheel-dialog"
+import {
+  BidAmountControl,
+  initialBidAmount,
+  validateBidAmount,
+} from "@/components/bid-amount-control"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -459,29 +463,15 @@ export function KhuiHomNayPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang tải các kỳ cần khui...
-      </div>
-    )
+    return <LoadingState label="Đang tải các kỳ cần khui..." />
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-4 md:p-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold md:text-2xl">
-            Khui kỳ
-          </h1>
-
-          <p className="mt-1 text-sm text-muted-foreground">
-            {formatDate(selectedDate)} ·{" "}
-            {completedCount}/{items.length} dây đã chốt
-          </p>
-        </div>
-
-        <Button
+    <AppPage>
+      <PageHeader
+        title="Khui kỳ"
+        subtitle={`${formatDate(selectedDate)} · ${completedCount}/${items.length} dây đã chốt`}
+        actions={<Button
           variant="outline"
           size="sm"
           onClick={() => void loadData()}
@@ -490,8 +480,8 @@ export function KhuiHomNayPage() {
           <span className="hidden sm:inline">
             Làm mới
           </span>
-        </Button>
-      </div>
+        </Button>}
+      />
 
       <Card className="p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -560,7 +550,7 @@ export function KhuiHomNayPage() {
             </div>
 
             {completedCount === items.length && (
-              <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+              <Badge className="bg-success-soft text-success-foreground hover:bg-success-soft">
                 <CheckCircle2 className="mr-1 size-3.5" />
                 Đã xử lý hết
               </Badge>
@@ -598,7 +588,7 @@ export function KhuiHomNayPage() {
           }
         />
       )}
-    </div>
+    </AppPage>
   )
 }
 
@@ -658,8 +648,8 @@ function PeriodCard({
           <Badge
             className={
               completed
-                ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
-                : "bg-amber-100 text-amber-800 hover:bg-amber-100"
+                ? "bg-success-soft text-success-foreground hover:bg-success-soft"
+                : "bg-warning-soft text-warning-foreground hover:bg-warning-soft"
             }
           >
             {completed && (
@@ -844,10 +834,12 @@ function KhuiDialog({
     group.bid_step_amount || 0,
   )
 
-  const initialBid =
-    period.bid_amount > 0
-      ? Number(period.bid_amount)
-      : minimumBid
+  const initialBid = initialBidAmount({
+    storedBid: period.bid_amount,
+    hasStoredResult:
+      completed || period.winner_share_id !== null,
+    minimumBid,
+  })
 
   const [winnerShareId, setWinnerShareId] =
     useState(
@@ -991,64 +983,7 @@ function KhuiDialog({
     setWheelOpen(false)
   }
 
-  function validateBid(value: number) {
-    if (value < minimumBid) {
-      return `Giá thăm phải từ ${formatVND(
-        minimumBid,
-      )} trở lên.`
-    }
-
-    if (
-      bidStep > 0 &&
-      (value - minimumBid) %
-        bidStep !==
-        0
-    ) {
-      return `Giá thăm phải theo bước ${formatVND(
-        bidStep,
-      )}.`
-    }
-
-    if (
-      value >=
-      Number(
-        group.contribution_amount || 0,
-      )
-    ) {
-      return "Giá thăm phải nhỏ hơn mệnh giá mỗi chân."
-    }
-
-    return ""
-  }
-
-  function changeBid(
-    direction: "down" | "up",
-  ) {
-    if (locked) return
-
-    const step =
-      bidStep > 0 ? bidStep : 1
-
-    const next =
-      direction === "up"
-        ? bidAmount + step
-        : bidAmount - step
-
-    const safeNext = Math.max(
-      minimumBid,
-      next,
-    )
-
-    if (
-      safeNext >=
-      Number(
-        group.contribution_amount || 0,
-      )
-    ) {
-      return
-    }
-
-    setBidAmount(safeNext)
+  function handleBidInteraction() {
     setPreviewReady(false)
     setError("")
   }
@@ -1063,8 +998,14 @@ function KhuiDialog({
       return
     }
 
-    const bidError =
-      validateBid(bidAmount)
+    const bidError = validateBidAmount({
+      value: bidAmount,
+      minimumBid,
+      bidStep,
+      contributionAmount: Number(
+        group.contribution_amount || 0,
+      ),
+    })
 
     if (bidError) {
       setError(bidError)
@@ -1094,8 +1035,14 @@ function KhuiDialog({
       return
     }
 
-    const bidError =
-      validateBid(bidAmount)
+    const bidError = validateBidAmount({
+      value: bidAmount,
+      minimumBid,
+      bidStep,
+      contributionAmount: Number(
+        group.contribution_amount || 0,
+      ),
+    })
 
     if (bidError) {
       setError(bidError)
@@ -1123,23 +1070,18 @@ function KhuiDialog({
         `${openedAt}:00+07:00`,
       ).toISOString()
 
-      const { error: updateError } =
-        await createClient()
-          .from("hui_periods")
-          .update({
-            winner_share_id:
-              winnerShareId,
-            bid_amount: bidAmount,
-            fee_amount:
-              group.fee_amount,
-            opened_at: openedAtIso,
-            status: "completed",
-            notes:
-              notes.trim() || null,
-            updated_at:
-              new Date().toISOString(),
-          })
-          .eq("id", period.id)
+      const { error: updateError } = await createClient().rpc(
+        "update_hui_period_result_atomic",
+        {
+          p_period_id: period.id,
+          p_winner_share_id: winnerShareId,
+          p_bid_amount: bidAmount,
+          p_fee_amount: group.fee_amount,
+          p_opened_at: openedAtIso,
+          p_status: "completed",
+          p_notes: notes.trim() || null,
+        },
+      )
 
       if (updateError) {
         throw updateError
@@ -1160,7 +1102,7 @@ function KhuiDialog({
   return (
     <>
       <div
-        className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/50 p-3 sm:p-4"
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/30 p-3 backdrop-blur-sm sm:p-4"
         role="dialog"
         aria-modal="true"
         onMouseDown={(event) => {
@@ -1172,7 +1114,7 @@ function KhuiDialog({
           }
         }}
       >
-        <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto p-4 sm:p-5">
+        <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto p-4 shadow-[var(--shadow-floating)] sm:p-5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -1209,7 +1151,7 @@ function KhuiDialog({
           </div>
 
           {locked && (
-            <Card className="mt-4 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <Card className="mt-4 border-warning/30 bg-warning-soft p-3 text-sm text-warning-foreground">
               <div className="flex gap-2">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
 
@@ -1335,58 +1277,17 @@ function KhuiDialog({
               </p>
             </div>
 
-            <div>
-              <p className="text-sm font-medium">
-                Giá thăm
-              </p>
-
-              <div className="mt-2 grid grid-cols-[52px_minmax(0,1fr)_52px] items-stretch gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-12"
-                  disabled={
-                    locked ||
-                    bidAmount <= minimumBid
-                  }
-                  onClick={() =>
-                    changeBid("down")
-                  }
-                  aria-label="Giảm giá thăm"
-                >
-                  <Minus className="size-5" />
-                </Button>
-
-                <div className="flex h-12 items-center justify-center rounded-md border bg-background px-3 text-center text-lg font-bold tabular-nums">
-                  {formatVND(bidAmount)}
-                </div>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-12"
-                  disabled={locked}
-                  onClick={() =>
-                    changeBid("up")
-                  }
-                  aria-label="Tăng giá thăm"
-                >
-                  <Plus className="size-5" />
-                </Button>
-              </div>
-
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                Tối thiểu{" "}
-                {formatVND(
-                  minimumBid,
-                )}{" "}
-                · mỗi lần tăng/giảm{" "}
-                {formatVND(
-                  bidStep,
-                )}
-              </p>
-            </div>
-
+            <BidAmountControl
+              value={bidAmount}
+              onChange={setBidAmount}
+              minimumBid={minimumBid}
+              bidStep={bidStep}
+              contributionAmount={Number(
+                group.contribution_amount || 0,
+              )}
+              disabled={locked}
+              onInteraction={handleBidInteraction}
+            />
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Ngày giờ khui
 
@@ -1418,7 +1319,7 @@ function KhuiDialog({
               >
                 {previewReady ? (
                   <>
-                    <CheckCircle2 className="size-4 text-emerald-600" />
+                    <CheckCircle2 className="size-4 text-success-foreground" />
                     Đã tính thử
                   </>
                 ) : (

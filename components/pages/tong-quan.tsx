@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { Page } from "@/components/app-shell"
+import { AppPage, ErrorState, LoadingState, PageHeader } from "@/components/hui-design"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -388,48 +389,29 @@ export function TongQuanPage({ onNavigate }: Props) {
     (dashboard.openPayCount > 0 ? 1 : 0)
 
   if (loading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang tải Hôm nay...
-      </div>
-    )
+    return <LoadingState label="Đang tải Hôm nay..." />
   }
 
   if (error) {
     return (
-      <div className="mx-auto max-w-7xl p-4 md:p-6">
-        <Card className="flex flex-col items-center gap-3 p-8 text-center">
-          <p className="font-medium text-destructive">
-            {error}
-          </p>
-
-          <Button
+      <AppPage wide>
+        <ErrorState description={error} action={<Button
             variant="outline"
             onClick={() => void loadData()}
           >
             <RefreshCw className="size-4" />
             Thử lại
-          </Button>
-        </Card>
-      </div>
+          </Button>} />
+      </AppPage>
     )
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5 p-4 md:p-6">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold md:text-2xl">
-            Hôm nay
-          </h1>
-
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {formatDate(today)}
-          </p>
-        </div>
-
-        <Button
+    <AppPage wide>
+      <PageHeader
+        title="Hôm nay"
+        subtitle={formatDate(today)}
+        actions={<Button
           variant="outline"
           size="sm"
           className="shrink-0"
@@ -437,8 +419,8 @@ export function TongQuanPage({ onNavigate }: Props) {
         >
           <RefreshCw className="size-4" />
           <span className="hidden sm:inline">Làm mới</span>
-        </Button>
-      </div>
+        </Button>}
+      />
 
       <div className="grid gap-3 md:grid-cols-3">
         <button
@@ -482,7 +464,7 @@ export function TongQuanPage({ onNavigate }: Props) {
                   Còn phải thu
                 </p>
 
-                <p className="mt-2 break-words text-2xl font-bold tabular-nums text-emerald-600 md:text-3xl">
+                <p className="mt-2 break-words text-2xl font-bold tabular-nums text-success-foreground md:text-3xl">
                   + {formatVND(dashboard.remainingCollect)}
                 </p>
 
@@ -495,7 +477,7 @@ export function TongQuanPage({ onNavigate }: Props) {
                 </p>
               </div>
 
-              <div className="rounded-md bg-emerald-50 p-2 text-emerald-600">
+              <div className="rounded-md bg-success-soft p-2 text-success-foreground">
                 <ArrowDownLeft className="size-5" />
               </div>
             </div>
@@ -514,7 +496,7 @@ export function TongQuanPage({ onNavigate }: Props) {
                   Còn phải chi
                 </p>
 
-                <p className="mt-2 break-words text-2xl font-bold tabular-nums text-red-600 md:text-3xl">
+                <p className="mt-2 break-words text-2xl font-bold tabular-nums text-danger-foreground md:text-3xl">
                   − {formatVND(dashboard.remainingPay)}
                 </p>
 
@@ -527,7 +509,7 @@ export function TongQuanPage({ onNavigate }: Props) {
                 </p>
               </div>
 
-              <div className="rounded-md bg-red-50 p-2 text-red-600">
+              <div className="rounded-md bg-danger-soft p-2 text-danger-foreground">
                 <ArrowUpRight className="size-5" />
               </div>
             </div>
@@ -550,7 +532,7 @@ export function TongQuanPage({ onNavigate }: Props) {
 
         {taskCount === 0 ? (
           <Card className="flex items-center gap-3 p-4">
-            <CheckCircle2 className="size-5 shrink-0 text-emerald-600" />
+            <CheckCircle2 className="size-5 shrink-0 text-success-foreground" />
 
             <div>
               <p className="font-semibold">
@@ -648,7 +630,7 @@ export function TongQuanPage({ onNavigate }: Props) {
           </div>
         )}
       </section>
-    </div>
+    </AppPage>
   )
 }
 
@@ -667,10 +649,10 @@ function TaskRow({
 }) {
   const iconClass =
     tone === "collect"
-      ? "text-emerald-600"
+      ? "text-success-foreground"
       : tone === "pay"
-        ? "text-red-600"
-        : "text-amber-600"
+        ? "text-danger-foreground"
+        : "text-warning-foreground"
 
   return (
     <button
@@ -806,7 +788,7 @@ function PeriodStatusBadge({
 }) {
   if (status === "completed") {
     return (
-      <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+      <Badge className="bg-success-soft text-success-foreground hover:bg-success-soft">
         <CheckCircle2 className="mr-1 size-3.5" />
         Đã chốt
       </Badge>
@@ -815,7 +797,7 @@ function PeriodStatusBadge({
 
   if (status === "editing") {
     return (
-      <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100">
+      <Badge className="bg-primary-soft text-primary hover:bg-primary-soft">
         <Clock3 className="mr-1 size-3.5" />
         Đang khui
       </Badge>
@@ -823,7 +805,7 @@ function PeriodStatusBadge({
   }
 
   return (
-    <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+    <Badge className="bg-warning-soft text-warning-foreground hover:bg-warning-soft">
       <Clock3 className="mr-1 size-3.5" />
       Chưa khui
     </Badge>

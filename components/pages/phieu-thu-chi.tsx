@@ -17,13 +17,13 @@ import {
 } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
+import { AppPage, ErrorState, LoadingState, PageHeader } from "@/components/hui-design"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { buildReceipts } from "./phieu/calculation"
 import {
-  fetchActivePaymentTotals,
   loadReceiptBaseData,
   loadReceiptLedgerData,
 } from "./phieu/data"
@@ -82,6 +82,7 @@ export function PhieuThuChiPage() {
   const [sharingKey, setSharingKey] = useState<string | null>(null)
   const [error, setError] = useState("")
   const paymentWriteLock = useRef(false)
+  const paymentOperationKey = useRef<string | null>(null)
   const dataRequestId = useRef(0)
   const baseLoaded = useRef(false)
 
@@ -145,6 +146,14 @@ export function PhieuThuChiPage() {
   useEffect(() => {
     void loadData(false)
   }, [loadData])
+
+  useEffect(() => {
+    if (paymentDialog === null) {
+      paymentOperationKey.current = null
+    } else if (paymentOperationKey.current === null) {
+      paymentOperationKey.current = crypto.randomUUID()
+    }
+  }, [paymentDialog])
 
   const receipts = useMemo(
     () =>
@@ -289,30 +298,13 @@ export function PhieuThuChiPage() {
     return data as ReceiptDbRow
   }
 
-  async function updateStoredReceiptStatus(
-    receiptId: string,
-    totalRequired: number,
-    activePaid: number,
-  ) {
-    const nextStatus =
-      totalRequired > 0 && activePaid >= totalRequired
-        ? "paid"
-        : activePaid > 0
-          ? "partial"
-          : "open"
-
-    const { error: statusError } = await createClient()
-      .from("hui_receipts")
-      .update({
-        status: nextStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", receiptId)
-
-    if (statusError) throw statusError
+  function rpcErrorMessage(caught: unknown) {
+    return typeof caught === "object" && caught && "message" in caught
+      ? String(caught.message)
+      : "Lỗi không xác định"
   }
 
-  async function createPayments(input: {
+  async function createPaymentsAtomic(input: {
     receipts: Receipt[]
     transactionDate: string
     method: "cash" | "transfer"
@@ -321,13 +313,9 @@ export function PhieuThuChiPage() {
   }) {
     if (input.receipts.length === 0 || paymentWriteLock.current) return
 
-    // Khóa đồng bộ ngay từ lần bấm đầu tiên. setWorking là state nên có thể
-    // chưa kịp render trước cú double-click thứ hai.
     paymentWriteLock.current = true
     setWorking(true)
     setError("")
-
-    let insertedCount = 0
 
     try {
       const candidates = input.receipts.filter(
@@ -343,227 +331,52 @@ export function PhieuThuChiPage() {
         return
       }
 
-      const supabase = createClient()
-      const now = new Date().toISOString()
+      const idempotencyKey =
+        paymentOperationKey.current ?? crypto.randomUUID()
+      paymentOperationKey.current = idempotencyKey
 
-      // Upsert phiếu theo lô thay vì gọi ensureReceipt hàng trăm lần.
-      // Không ghi đè status/settlement của phiếu đang có.
-      const receiptPayloads = candidates.map((receipt) => ({
-        member_id: receipt.member.id,
-        receipt_date: receipt.receiptDate,
-        source_total_pay: receipt.totalPay,
-        source_total_receive: receipt.totalReceive,
-        source_total_fee: receipt.totalFee,
-        source_total_profit: 0,
-        updated_at: now,
-      }))
-
-      const freshReceiptRows: ReceiptDbRow[] = []
-      const receiptBatchSize = 100
-
-      for (let i = 0; i < receiptPayloads.length; i += receiptBatchSize) {
-        const chunk = receiptPayloads.slice(i, i + receiptBatchSize)
-        const { data, error: receiptError } = await supabase
-          .from("hui_receipts")
-          .upsert(chunk, { onConflict: "member_id,receipt_date" })
-          .select(
-            "id, member_id, receipt_date, settlement_amount, note, status, cancelled_at, cancel_reason",
-          )
-
-        if (receiptError) throw receiptError
-        freshReceiptRows.push(...((data ?? []) as ReceiptDbRow[]))
-      }
-
-      const dbByKey = new Map(
-        freshReceiptRows.map((row) => [
-          `${row.receipt_date}|${row.member_id}`,
-          row,
-        ]),
+      const { data, error: rpcError } = await createClient().rpc(
+        "record_receipt_payment_atomic",
+        {
+          p_idempotency_key: idempotencyKey,
+          p_items: candidates.map((receipt) => ({
+            member_id: receipt.member.id,
+            receipt_date: receipt.receiptDate,
+            source_total_pay: receipt.totalPay,
+            source_total_receive: receipt.totalReceive,
+            source_total_fee: receipt.totalFee,
+            requested_amount:
+              candidates.length === 1 && input.amount != null
+                ? input.amount
+                : null,
+            source_period_id: null,
+            existing_payment_id: null,
+          })),
+          p_method: input.method,
+          p_transaction_date: input.transactionDate,
+          p_note: input.note.trim() || null,
+        },
       )
 
-      const receiptIds = freshReceiptRows.map((row) => row.id)
+      if (rpcError) throw rpcError
 
-      // Luôn đọc lại ledger thật và có phân trang trước khi insert. Không dựa
-      // vào dữ liệu đang hiển thị trên UI vì UI có thể vừa cũ hoặc vừa retry.
-      const paidByReceiptDirection = await fetchActivePaymentTotals(receiptIds)
-
-      const pending: Array<{
-        receipt: Receipt
-        db: ReceiptDbRow
-        amount: number
-        freshPaid: number
-        totalRequired: number
-      }> = []
-      let skippedCount = 0
-
-      for (const receipt of candidates) {
-        const db = dbByKey.get(`${receipt.receiptDate}|${receipt.member.id}`)
-
-        if (!db || db.status === "cancelled") {
-          skippedCount += 1
-          continue
-        }
-
-        const freshPaid =
-          paidByReceiptDirection.get(`${db.id}|${receipt.direction}`) ?? 0
-
-        const totalRequired = Math.abs(receipt.netAmount)
-        const freshRemaining = Math.max(0, totalRequired - freshPaid)
-
-        if (freshRemaining <= 0) {
-          skippedCount += 1
-          continue
-        }
-
-        const requestedAmount =
-          candidates.length === 1 && input.amount != null
-            ? input.amount
-            : freshRemaining
-
-        if (requestedAmount <= 0) {
-          skippedCount += 1
-          continue
-        }
-
-        if (requestedAmount > freshRemaining) {
-          throw new Error(
-            `Phiếu của ${receipt.member.full_name} vừa thay đổi. ` +
-              `Hiện chỉ còn ${formatVND(freshRemaining)}. Hãy mở lại phiếu rồi xác nhận lại.`,
-          )
-        }
-
-        pending.push({
-          receipt,
-          db,
-          amount: requestedAmount,
-          freshPaid,
-          totalRequired,
-        })
-      }
-
-      if (pending.length === 0) {
-        setPaymentDialog(null)
-        setSelectedKeys([])
-        await loadData()
-        window.alert(
-          `Không tạo thêm giao dịch. ${skippedCount} phiếu đã đủ, đã hủy hoặc không còn số tiền cần thanh toán.`,
-        )
-        return
-      }
-
-      const paymentPayload = pending.map((item) => ({
-        receipt_id: item.db.id,
-        direction: item.receipt.direction,
-        amount: item.amount,
-        method: input.method,
-        transaction_date: input.transactionDate,
-        note: input.note.trim() || null,
-      }))
-
-      // Chia nhỏ insert để tránh một request quá lớn. Nếu một batch sau lỗi,
-      // batch đã thành công vẫn được ledger ghi nhận; lần retry sẽ đọc lại và
-      // tự bỏ qua các phiếu đó thay vì tạo trùng.
-      const insertBatchSize = 100
-      for (let i = 0; i < paymentPayload.length; i += insertBatchSize) {
-        const chunk = paymentPayload.slice(i, i + insertBatchSize)
-        const { error: insertError } = await supabase
-          .from("receipt_payments")
-          .insert(chunk)
-
-        if (insertError) throw insertError
-        insertedCount += chunk.length
-      }
-
-      // Tất cả bulk/full sẽ thành paid. Trường hợp một phiếu nhập một phần
-      // có thể là partial hoặc paid nếu số nhập bằng đúng phần còn lại.
-      const paidIds: string[] = []
-      const partialIds: string[] = []
-
-      for (const item of pending) {
-        const afterPaid = item.freshPaid + item.amount
-        if (item.totalRequired > 0 && afterPaid >= item.totalRequired) {
-          paidIds.push(item.db.id)
-        } else {
-          partialIds.push(item.db.id)
-        }
-      }
-
-      const statusBatchSize = 100
-      for (const [status, ids] of [
-        ["paid", paidIds],
-        ["partial", partialIds],
-      ] as const) {
-        for (let i = 0; i < ids.length; i += statusBatchSize) {
-          const chunk = ids.slice(i, i + statusBatchSize)
-          if (chunk.length === 0) continue
-
-          const { error: statusError } = await supabase
-            .from("hui_receipts")
-            .update({ status, updated_at: new Date().toISOString() })
-            .in("id", chunk)
-
-          if (statusError) throw statusError
-        }
-      }
-
-      const auditPayload = pending.map((item) => ({
-        entity_type: "receipt",
-        entity_id: item.db.id,
-        action:
-          item.receipt.direction === "collect"
-            ? "collect_payment"
-            : "pay_payment",
-        after_data: {
-          amount: item.amount,
-          method: input.method,
-          transaction_date: input.transactionDate,
-          note: input.note.trim() || null,
-        },
-      }))
-
-      const auditBatchSize = 100
-      for (let i = 0; i < auditPayload.length; i += auditBatchSize) {
-        const chunk = auditPayload.slice(i, i + auditBatchSize)
-        const { error: auditError } = await supabase
-          .from("audit_logs")
-          .insert(chunk)
-
-        if (auditError) {
-          // Payment đã ghi thành công thì không được coi audit lỗi là lý do để
-          // người dùng phải ghi payment lại. Giữ log console để kiểm tra sau.
-          console.error("Không thể ghi một batch audit_logs:", auditError)
-        }
-      }
+      const result = data as { payments?: unknown[] } | null
+      const paymentCount = Array.isArray(result?.payments)
+        ? result.payments.length
+        : candidates.length
+      const actionLabel = candidates[0]?.direction === "pay" ? "chi" : "thu"
 
       setPaymentDialog(null)
       setSelectedKeys([])
       await loadData()
-
-      const actionLabel =
-        pending[0]?.receipt.direction === "pay" ? "chi" : "thu"
-      window.alert(
-        `Đã ghi nhận ${actionLabel} ${pending.length} phiếu.` +
-          (skippedCount > 0
-            ? ` Bỏ qua ${skippedCount} phiếu đã đủ/hủy hoặc không còn số tiền.`
-            : ""),
-      )
+      window.alert(`Đã ghi nhận ${actionLabel} ${paymentCount} phiếu.`)
     } catch (caught) {
       console.error(caught)
-
-      // Nếu một batch payment đã insert rồi nhưng bước sau gặp lỗi, tải lại
-      // ngay để UI phản ánh ledger thật. Retry sau đó cũng sẽ không tạo trùng.
-      if (insertedCount > 0) {
-        try {
-          await loadData()
-        } catch (reloadError) {
-          console.error(reloadError)
-        }
-      }
-
+      const message = rpcErrorMessage(caught)
       setError(
-        caught instanceof Error
-          ? `Không thể ghi nhận giao dịch: ${caught.message}`
-          : "Không thể ghi nhận giao dịch.",
+        message.includes("stale_snapshot")
+          ? "Phiếu đã thay đổi trên hệ thống. Hãy làm mới dữ liệu rồi xác nhận lại."
+          : `Không thể ghi nhận giao dịch: ${message}`,
       )
     } finally {
       paymentWriteLock.current = false
@@ -571,7 +384,7 @@ export function PhieuThuChiPage() {
     }
   }
 
-  async function editPayment(
+  async function editPaymentAtomic(
     receipt: Receipt,
     payment: PaymentRow,
     input: {
@@ -581,128 +394,103 @@ export function PhieuThuChiPage() {
       note: string
     },
   ) {
-    if (payment.status !== "active") return
+    if (payment.status !== "active" || paymentWriteLock.current) return
 
-    const otherActivePaid = Math.max(
-      0,
-      receipt.paidAmount - Number(payment.amount),
-    )
-    const maxAmount = Math.max(
-      0,
-      Math.abs(receipt.netAmount) - otherActivePaid,
-    )
-
-    if (input.amount <= 0 || input.amount > maxAmount) {
-      window.alert(
-        `Số tiền phải lớn hơn 0 và không vượt quá ${formatVND(maxAmount)}.`,
-      )
-      return
-    }
-
+    paymentWriteLock.current = true
     setWorking(true)
     setError("")
 
     try {
-      const supabase = createClient()
-      const before = {
-        amount: Number(payment.amount),
-        method: payment.method,
-        transaction_date: payment.transaction_date,
-        note: payment.note,
-      }
-      const after = {
-        amount: input.amount,
-        method: input.method,
-        transaction_date: input.transactionDate,
-        note: input.note.trim() || null,
-      }
+      const idempotencyKey =
+        paymentOperationKey.current ?? crypto.randomUUID()
+      paymentOperationKey.current = idempotencyKey
 
-      const { error: updateError } = await supabase
-        .from("receipt_payments")
-        .update({
-          ...after,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", payment.id)
+      const { error: rpcError } = await createClient().rpc(
+        "record_receipt_payment_atomic",
+        {
+          p_idempotency_key: idempotencyKey,
+          p_items: [
+            {
+              member_id: receipt.member.id,
+              receipt_date: receipt.receiptDate,
+              source_total_pay: receipt.totalPay,
+              source_total_receive: receipt.totalReceive,
+              source_total_fee: receipt.totalFee,
+              requested_amount: input.amount,
+              source_period_id: payment.source_period_id,
+              existing_payment_id: payment.id,
+            },
+          ],
+          p_method: input.method,
+          p_transaction_date: input.transactionDate,
+          p_note: input.note.trim() || null,
+        },
+      )
 
-      if (updateError) throw updateError
-
-      if (receipt.db) {
-        await updateStoredReceiptStatus(
-          receipt.db.id,
-          Math.abs(receipt.netAmount),
-          otherActivePaid + input.amount,
-        )
-      }
-
-      await supabase.from("audit_logs").insert({
-        entity_type: "payment",
-        entity_id: payment.id,
-        action: "edit",
-        before_data: before,
-        after_data: after,
-        reason:
-          payment.method === "legacy_import" || payment.method === "other"
-            ? "Đối chiếu / chỉnh dữ liệu cũ"
-            : "Chỉnh giao dịch thu chi",
-      })
+      if (rpcError) throw rpcError
 
       setPaymentDialog(null)
       await loadData()
     } catch (caught) {
       console.error(caught)
-      setError("Không thể sửa giao dịch.")
+      const message = rpcErrorMessage(caught)
+      setError(
+        message.includes("stale_snapshot")
+          ? "Phiếu đã thay đổi trên hệ thống. Hãy làm mới dữ liệu rồi sửa lại."
+          : `Không thể sửa giao dịch: ${message}`,
+      )
     } finally {
+      paymentWriteLock.current = false
       setWorking(false)
     }
   }
 
-  async function cancelPayment(
-    receipt: Receipt,
-    payment: PaymentRow,
-  ) {
+  async function cancelPaymentAtomic(payment: PaymentRow) {
     const reason = window.prompt("Lý do hủy giao dịch này:")
     if (!reason?.trim()) return
 
     setWorking(true)
     setError("")
-
     try {
-      const supabase = createClient()
-
-      const { error: cancelError } = await supabase
-        .from("receipt_payments")
-        .update({
-          status: "cancelled",
-          cancelled_at: new Date().toISOString(),
-          cancel_reason: reason.trim(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", payment.id)
-
-      if (cancelError) throw cancelError
-
-      if (receipt.db) {
-        await updateStoredReceiptStatus(
-          receipt.db.id,
-          Math.abs(receipt.netAmount),
-          Math.max(0, receipt.paidAmount - Number(payment.amount)),
-        )
-      }
-
-      await supabase.from("audit_logs").insert({
-        entity_type: "payment",
-        entity_id: payment.id,
-        action: "cancel",
-        before_data: payment,
-        after_data: { ...payment, status: "cancelled" },
-        reason: reason.trim(),
-      })
-
+      const { error: rpcError } = await createClient().rpc(
+        "cancel_receipt_payment_atomic",
+        { p_payment_id: payment.id, p_reason: reason.trim() },
+      )
+      if (rpcError) throw rpcError
       await loadData()
     } catch (caught) {
       console.error(caught)
-      setError("Không thể hủy giao dịch.")
+      setError(`Không thể hủy giao dịch: ${rpcErrorMessage(caught)}`)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function cancelReceiptAtomic(receipt: Receipt) {
+    const reason = window.prompt("Lý do hủy phiếu:")
+    if (!reason?.trim()) return
+    if (!receipt.db) {
+      window.alert("Phiếu này chưa được lưu nên không có bản ghi để hủy.")
+      return
+    }
+
+    setWorking(true)
+    setError("")
+    try {
+      const { error: rpcError } = await createClient().rpc(
+        "cancel_receipt_atomic",
+        { p_receipt_id: receipt.db.id, p_reason: reason.trim() },
+      )
+      if (rpcError) throw rpcError
+      await loadData()
+    } catch (caught) {
+      console.error(caught)
+      const message = rpcErrorMessage(caught)
+      setError(
+        message.includes("receipt_has_active_payment")
+          ? "Không thể hủy phiếu khi còn giao dịch đang hiệu lực."
+          : `Không thể hủy phiếu: ${message}`,
+      )
     } finally {
       setWorking(false)
     }
@@ -784,56 +572,6 @@ export function PhieuThuChiPage() {
     }
   }
 
-  async function cancelReceipt(receipt: Receipt) {
-    const reason = window.prompt("Lý do hủy phiếu:")
-    if (!reason?.trim()) return
-
-    if (
-      receipt.payments.some((x) => x.status === "active") &&
-      !window.confirm(
-        "Phiếu đang có giao dịch thu/chi. Nên hủy từng giao dịch trước. Vẫn hủy phiếu?",
-      )
-    ) {
-      return
-    }
-
-    setWorking(true)
-    setError("")
-
-    try {
-      const db = await ensureReceipt(receipt)
-      const supabase = createClient()
-
-      const { error: receiptCancelError } = await supabase
-        .from("hui_receipts")
-        .update({
-          status: "cancelled",
-          cancelled_at: new Date().toISOString(),
-          cancel_reason: reason.trim(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", db.id)
-
-      if (receiptCancelError) throw receiptCancelError
-
-      await supabase.from("audit_logs").insert({
-        entity_type: "receipt",
-        entity_id: db.id,
-        action: "cancel",
-        before_data: { status: receipt.status },
-        after_data: { status: "cancelled" },
-        reason: reason.trim(),
-      })
-
-      await loadData()
-    } catch (caught) {
-      console.error(caught)
-      setError("Không thể hủy phiếu.")
-    } finally {
-      setWorking(false)
-    }
-  }
-
   async function handleShareFromList(receipt: Receipt) {
     if (sharingKey || working) return
     setSharingKey(receipt.key)
@@ -851,25 +589,17 @@ export function PhieuThuChiPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang lập phiếu từ dữ liệu hụi...
-      </div>
-    )
+    return <LoadingState label="Đang lập phiếu từ dữ liệu hụi..." />
   }
 
   if (error && groups.length === 0) {
     return (
-      <div className="mx-auto max-w-3xl p-4 md:p-6">
-        <Card className="flex flex-col items-center gap-3 p-8 text-center">
-          <p className="font-medium text-destructive">{error}</p>
-          <Button variant="outline" onClick={() => void loadData(true)}>
+      <AppPage>
+        <ErrorState description={error} action={<Button variant="outline" onClick={() => void loadData(true)}>
             <RefreshCw className="size-4" />
             Thử lại
-          </Button>
-        </Card>
-      </div>
+          </Button>} />
+      </AppPage>
     )
   }
 
@@ -896,7 +626,7 @@ export function PhieuThuChiPage() {
             })
           }
           onEdit={() => void editReceipt(preview)}
-          onCancel={() => void cancelReceipt(preview)}
+          onCancel={() => void cancelReceiptAtomic(preview)}
           onEditPayment={(payment) =>
             setPaymentDialog({
               mode: "edit",
@@ -905,7 +635,7 @@ export function PhieuThuChiPage() {
             })
           }
           onCancelPayment={(payment) =>
-            void cancelPayment(preview, payment)
+            void cancelPaymentAtomic(payment)
           }
         />
 
@@ -913,9 +643,9 @@ export function PhieuThuChiPage() {
           state={paymentDialog}
           working={working}
           onClose={() => setPaymentDialog(null)}
-          onCreate={(input) => void createPayments(input)}
+          onCreate={(input) => void createPaymentsAtomic(input)}
           onEdit={(receipt, payment, input) =>
-            void editPayment(receipt, payment, input)
+            void editPaymentAtomic(receipt, payment, input)
           }
         />
       </>
@@ -928,16 +658,11 @@ export function PhieuThuChiPage() {
     : formatDateRange(effectiveFrom, effectiveTo)
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-4 p-4 md:p-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">Phiếu hụi</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Theo dõi phiếu, thu/chi thực tế và gửi ảnh qua Zalo.
-          </p>
-        </div>
-
-        <Button
+    <AppPage wide>
+      <PageHeader
+        title="Phiếu hụi"
+        subtitle="Theo dõi phiếu, thu/chi thực tế và gửi ảnh qua Zalo."
+        actions={<Button
           variant="outline"
           size="sm"
           onClick={() => void loadData(true)}
@@ -945,8 +670,8 @@ export function PhieuThuChiPage() {
         >
           <RefreshCw className="size-4" />
           <span className="hidden sm:inline">Làm mới</span>
-        </Button>
-      </div>
+        </Button>}
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
@@ -1224,12 +949,12 @@ export function PhieuThuChiPage() {
         state={paymentDialog}
         working={working}
         onClose={() => setPaymentDialog(null)}
-        onCreate={(input) => void createPayments(input)}
+        onCreate={(input) => void createPaymentsAtomic(input)}
         onEdit={(receipt, payment, input) =>
-          void editPayment(receipt, payment, input)
+          void editPaymentAtomic(receipt, payment, input)
         }
       />
-    </div>
+    </AppPage>
   )
 }
 

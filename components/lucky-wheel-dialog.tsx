@@ -181,12 +181,12 @@ export function LuckyWheelDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/60 p-3 sm:p-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/30 p-3 backdrop-blur-sm sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Bốc thăm người hốt"
     >
-      <Card className="max-h-[96vh] w-full max-w-lg overflow-y-auto p-4 sm:p-5">
+      <Card className="max-h-[96vh] w-full max-w-lg overflow-y-auto border-border p-4 shadow-[var(--shadow-floating)] sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
