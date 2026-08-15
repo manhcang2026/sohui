@@ -2,11 +2,15 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react"
 import {
+  AlertTriangle,
   KeyRound,
   LoaderCircle,
   RefreshCw,
   RotateCcw,
   Shield,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
   UserPlus,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -18,6 +22,15 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { StatusBadge } from "@/components/hui-design"
 
 type AppRole = "super_admin" | "admin" | "member"
 
@@ -35,6 +48,7 @@ type MemberOption = {
   id: string
   full_name: string
   phone: string | null
+  is_active: boolean
 }
 
 type ManagedUser = CurrentProfile & {
@@ -78,7 +92,10 @@ export function AccountSecurity() {
           .select("auth_user_id, email, phone, display_name, role, member_id, is_active")
           .eq("auth_user_id", authUser.id)
           .maybeSingle(),
-        supabase.from("members").select("id, full_name, phone").order("full_name"),
+        supabase
+          .from("members")
+          .select("id, full_name, phone, is_active")
+          .order("full_name"),
       ])
 
     if (profileError || !profileData) {
@@ -135,6 +152,7 @@ export function AccountSecurity() {
 
       {isSuper && (
         <SuperAdminUsers
+          currentUserId={profile?.auth_user_id ?? ""}
           users={users}
           members={members}
           onReload={() => void loadAll()}
@@ -163,6 +181,36 @@ function ChangePinCard({
   profile: CurrentProfile
   onChanged: (message: string) => void
   onError: (message: string) => void
+}) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-2">
+        <KeyRound className="size-5 text-primary" />
+        <div>
+          <h2 className="font-semibold">Mã đăng nhập 4 số</h2>
+          <p className="text-xs text-muted-foreground">
+            {displayVietnamPhone(profile.phone)}
+          </p>
+        </div>
+      </div>
+
+      <ChangePinForm
+        className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+        onChanged={onChanged}
+        onError={onError}
+      />
+    </Card>
+  )
+}
+
+export function ChangePinForm({
+  onChanged,
+  onError,
+  className = "grid gap-3",
+}: {
+  onChanged: (message: string) => void
+  onError: (message: string) => void
+  className?: string
 }) {
   const [pin, setPin] = useState("")
   const [confirmPin, setConfirmPin] = useState("")
@@ -209,18 +257,7 @@ function ChangePinCard({
   }
 
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-2">
-        <KeyRound className="size-5" />
-        <div>
-          <h2 className="font-semibold">Mã đăng nhập 4 số</h2>
-          <p className="text-xs text-muted-foreground">
-            {displayVietnamPhone(profile.phone)}
-          </p>
-        </div>
-      </div>
-
-      <form className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end" onSubmit={submit}>
+      <form className={className} onSubmit={submit}>
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Mã mới
           <Input inputMode="numeric" type="password" maxLength={4} value={pin}
@@ -231,22 +268,26 @@ function ChangePinCard({
           <Input inputMode="numeric" type="password" maxLength={4} value={confirmPin}
             onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 4))} />
         </label>
-        <Button type="submit" disabled={saving}>Đổi mã</Button>
+        <Button type="submit" disabled={saving}>
+          {saving && <LoaderCircle className="size-4 animate-spin" />}
+          Đổi mã
+        </Button>
+        <p className="text-xs text-muted-foreground sm:col-span-full">
+          Nếu quên mã, liên hệ super admin để reset về 0000.
+        </p>
       </form>
-      <p className="mt-3 text-xs text-muted-foreground">
-        Nếu quên mã, liên hệ super admin để reset về 0000.
-      </p>
-    </Card>
   )
 }
 
 function SuperAdminUsers({
+  currentUserId,
   users,
   members,
   onReload,
   onMessage,
   onError,
 }: {
+  currentUserId: string
   users: ManagedUser[]
   members: MemberOption[]
   onReload: () => void
@@ -259,6 +300,8 @@ function SuperAdminUsers({
   const [memberId, setMemberId] = useState("")
   const [workingId, setWorkingId] = useState("")
   const [creating, setCreating] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<ManagedUser | null>(null)
+  const activeMembers = members.filter((member) => member.is_active)
 
   const suggestedPhone = useMemo(() => {
     if (!memberId) return ""
@@ -336,28 +379,47 @@ function SuperAdminUsers({
 
   async function updateUser(user: ManagedUser, next: Partial<ManagedUser>) {
     setWorkingId(user.auth_user_id)
-    const accessToken = await token()
-    const response = await fetch("/api/admin/users", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        auth_user_id: user.auth_user_id,
-        action: "update_profile",
-        display_name: next.display_name ?? user.display_name ?? displayVietnamPhone(user.phone),
-        role: next.role ?? user.role,
-        member_id: next.member_id !== undefined ? next.member_id : user.member_id,
-        is_active: next.is_active !== undefined ? next.is_active : user.is_active,
-      }),
-    })
-    const result = await response.json()
-    setWorkingId("")
+    try {
+      const accessToken = await token()
+      const response = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          auth_user_id: user.auth_user_id,
+          action: "update_profile",
+          display_name: next.display_name ?? user.display_name ?? displayVietnamPhone(user.phone),
+          role: next.role ?? user.role,
+          member_id: next.member_id !== undefined ? next.member_id : user.member_id,
+          is_active: next.is_active !== undefined ? next.is_active : user.is_active,
+        }),
+      })
+      const result = await response.json()
 
-    if (!response.ok) return onError(result.error ?? "Không cập nhật được tài khoản.")
-    onMessage("Đã cập nhật phân quyền.")
-    onReload()
+      if (!response.ok) {
+        onError(result.error ?? "Không cập nhật được tài khoản.")
+        return
+      }
+
+      onMessage(
+        next.is_active === undefined
+          ? "Đã cập nhật phân quyền."
+          : next.is_active
+            ? "Đã mở khóa đăng nhập."
+            : "Đã khóa đăng nhập; hồ sơ hụi viên không thay đổi.",
+      )
+      onReload()
+    } catch (caught) {
+      onError(
+        caught instanceof Error
+          ? caught.message
+          : "Không cập nhật được tài khoản.",
+      )
+    } finally {
+      setWorkingId("")
+    }
   }
 
   return (
@@ -380,12 +442,17 @@ function SuperAdminUsers({
             onChange={(e) => setMemberId(e.target.value)}
           >
             <option value="">Không liên kết</option>
-            {members.map((member) => (
+            {activeMembers.map((member) => (
               <option key={member.id} value={member.id}>
                 {member.full_name}{member.phone ? ` — ${member.phone}` : ""}
               </option>
             ))}
           </select>
+          {activeMembers.length === 0 && (
+            <span className="text-xs font-normal text-muted-foreground">
+              Chưa có hụi viên đang hoạt động để tạo liên kết mới.
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -472,35 +539,88 @@ function SuperAdminUsers({
                       onChange={(e) => void updateUser(user, { member_id: e.target.value || null })}
                     >
                       <option value="">Không liên kết</option>
-                      {members.map((member) => (
-                        <option key={member.id} value={member.id}>{member.full_name}</option>
-                      ))}
+                      {members
+                        .filter(
+                          (member) =>
+                            member.is_active || member.id === user.member_id,
+                        )
+                        .map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.full_name}
+                            {!member.is_active
+                              ? " — Tạm ngưng (đang liên kết)"
+                              : ""}
+                          </option>
+                        ))}
                     </select>
                   </td>
                   <td className="px-3 py-3">
-                    <button
-                      type="button"
-                      disabled={user.role === "super_admin" || workingId === user.auth_user_id}
-                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void updateUser(user, { is_active: !user.is_active })}
-                    >
-                      {user.is_active ? "Hoạt động" : "Khóa"}
-                    </button>
+                    <div className="flex min-w-[170px] flex-col items-start gap-2">
+                      <StatusBadge
+                        label={user.is_active ? "Đăng nhập hoạt động" : "Đã khóa"}
+                        tone={user.is_active ? "success" : "warning"}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          user.auth_user_id === currentUserId ||
+                          user.role === "super_admin" ||
+                          workingId === user.auth_user_id
+                        }
+                        onClick={() =>
+                          void updateUser(user, { is_active: !user.is_active })
+                        }
+                      >
+                        {workingId === user.auth_user_id ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : user.is_active ? (
+                          <ShieldAlert className="size-4" />
+                        ) : (
+                          <ShieldCheck className="size-4" />
+                        )}
+                        {user.is_active ? "Khóa đăng nhập" : "Mở khóa đăng nhập"}
+                      </Button>
+                    </div>
                   </td>
                   <td className="px-3 py-3">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!user.phone || workingId === user.auth_user_id}
-                      onClick={() => void resetPin(user)}
-                    >
-                      {workingId === user.auth_user_id ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <RotateCcw className="size-4" />
-                      )}
-                      Reset 0000
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!user.phone || workingId === user.auth_user_id}
+                        onClick={() => void resetPin(user)}
+                      >
+                        {workingId === user.auth_user_id ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <RotateCcw className="size-4" />
+                        )}
+                        Reset 0000
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-danger"
+                        title={
+                          user.auth_user_id === currentUserId
+                            ? "Không thể tự xóa tài khoản đang đăng nhập"
+                            : user.role === "super_admin"
+                              ? "Không thể xóa super admin bằng thao tác thông thường"
+                              : "Mở lựa chọn xóa tài khoản và kiểm tra hồ sơ"
+                        }
+                        disabled={
+                          user.auth_user_id === currentUserId ||
+                          user.role === "super_admin" ||
+                          workingId === user.auth_user_id
+                        }
+                        onClick={() => setDeleteTarget(user)}
+                      >
+                        <Trash2 className="size-4" />
+                        Xóa...
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -508,6 +628,198 @@ function SuperAdminUsers({
           </table>
         </div>
       </div>
+
+      <DeleteAccountDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={(message) => {
+          setDeleteTarget(null)
+          onMessage(message)
+          onReload()
+        }}
+      />
     </Card>
+  )
+}
+
+function DeleteAccountDialog({
+  target,
+  onClose,
+  onDeleted,
+}: {
+  target: ManagedUser | null
+  onClose: () => void
+  onDeleted: (message: string) => void
+}) {
+  const [reason, setReason] = useState("")
+  const [confirmation, setConfirmation] = useState("")
+  const [error, setError] = useState("")
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    setReason("")
+    setConfirmation("")
+    setError("")
+  }, [target])
+
+  if (!target) return null
+
+  const targetUserId = target.auth_user_id
+  const displayName =
+    target.display_name || displayVietnamPhone(target.phone)
+  const targetPhone = target.phone
+    ? displayVietnamPhone(target.phone)
+    : "Chưa có số điện thoại"
+  let normalizedTargetPhone = ""
+  if (target.phone) {
+    try {
+      normalizedTargetPhone = normalizeVietnamPhone(target.phone)
+    } catch {
+      normalizedTargetPhone = ""
+    }
+  }
+  const hasLegacyInvalidPhone = Boolean(target.phone) && !normalizedTargetPhone
+  let confirmationMatchesPhone = false
+  if (normalizedTargetPhone && confirmation.trim()) {
+    try {
+      confirmationMatchesPhone =
+        normalizeVietnamPhone(confirmation) === normalizedTargetPhone
+    } catch {
+      confirmationMatchesPhone = false
+    }
+  }
+  const confirmationValid =
+    confirmation.trim() === "XOA" ||
+    confirmationMatchesPhone
+  const canDeleteLogin =
+    reason.trim().length >= 5 && confirmationValid
+
+  async function deleteLoginAccount() {
+    if (deleting || !canDeleteLogin) return
+    setDeleting(true)
+    setError("")
+
+    try {
+      const { data } = await createClient().auth.getSession()
+      const accessToken = data.session?.access_token ?? ""
+      const response = await fetch("/api/admin/users", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          auth_user_id: targetUserId,
+          reason,
+          confirmation,
+        }),
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ?? "Không thể xóa tài khoản đăng nhập.",
+        )
+      }
+
+      onDeleted(
+        result.audit_warning
+          ? `Đã xóa tài khoản đăng nhập. ${result.audit_warning}`
+          : "Đã xóa tài khoản đăng nhập; hồ sơ hụi viên và lịch sử tiền được giữ nguyên.",
+      )
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Không thể xóa tài khoản đăng nhập.",
+      )
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleting && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Xóa tài khoản đăng nhập</DialogTitle>
+          <DialogDescription>
+            Chỉ xóa quyền đăng nhập. Hồ sơ hụi viên và toàn bộ lịch sử nghiệp
+            vụ, phiếu và tiền vẫn được giữ nguyên.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="rounded-lg border border-border bg-secondary p-3">
+          <p className="font-bold">{displayName}</p>
+          <p className="text-sm text-muted-foreground">{targetPhone}</p>
+        </div>
+
+        <section className="rounded-lg border border-danger/25 bg-danger-soft p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" />
+            <div>
+              <h3 className="font-bold text-danger">
+                Xóa tài khoản đăng nhập
+              </h3>
+              <p className="mt-1 text-sm leading-relaxed">
+                Người này sẽ không đăng nhập được nữa. Hồ sơ hụi viên, chân
+                hụi, phiếu và toàn bộ lịch sử tiền vẫn được giữ. Nếu chỉ muốn
+                ngăn truy cập tạm thời, hãy đóng dialog và dùng “Khóa tài
+                khoản”.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Lý do bắt buộc
+              <Input
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              {hasLegacyInvalidPhone
+                ? "Gõ XOA để xác nhận"
+                : "Gõ XOA hoặc đúng số điện thoại"}
+              <Input
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                autoComplete="off"
+              />
+              {hasLegacyInvalidPhone && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  Số điện thoại cũ không hợp lệ nên không thể dùng để xác nhận.
+                </span>
+              )}
+            </label>
+          </div>
+        </section>
+
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={deleting}>
+            Đóng
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!canDeleteLogin || deleting}
+            onClick={() => void deleteLoginAccount()}
+          >
+            {deleting ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
+            Xóa tài khoản đăng nhập
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

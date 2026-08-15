@@ -92,6 +92,224 @@ export async function GET(request: NextRequest) {
   }
 }
 
+function isInactiveMemberLinkError(error: { message?: string } | null) {
+  return error?.message?.includes("member_inactive_for_new_business") ?? false
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const auth = await requireSuperAdmin(request)
+
+    if ("error" in auth) {
+      return NextResponse.json(
+        { error: auth.error },
+        { status: auth.status },
+      )
+    }
+
+    const body = await request.json()
+    const userId = String(body.auth_user_id ?? "")
+    const reason = String(body.reason ?? "").trim()
+    const confirmation = String(body.confirmation ?? "").trim()
+
+    if (!userId) {
+      return NextResponse.json({ error: "Thiếu user id." }, { status: 400 })
+    }
+
+    if (userId === auth.user.id) {
+      return NextResponse.json(
+        { error: "Không thể tự xóa tài khoản đang đăng nhập." },
+        { status: 400 },
+      )
+    }
+
+    if (reason.length < 5) {
+      return NextResponse.json(
+        { error: "Lý do xóa phải có ít nhất 5 ký tự." },
+        { status: 400 },
+      )
+    }
+
+    const { data: target, error: targetError } = await auth.supabase
+      .from("app_users")
+      .select("auth_user_id, phone, display_name, role, member_id, is_active, created_at, updated_at")
+      .eq("auth_user_id", userId)
+      .maybeSingle()
+
+    if (targetError) throw targetError
+
+    if (!target) {
+      const { data: priorAttempt } = await auth.supabase
+        .from("audit_logs")
+        .select("id, action")
+        .eq("entity_type", "app_user")
+        .eq("entity_id", userId)
+        .in("action", ["delete_login_attempt", "delete_login_succeeded"])
+        .limit(1)
+        .maybeSingle()
+
+      if (priorAttempt) {
+        const { data: authTarget, error: authLookupError } =
+          await auth.supabase.auth.admin.getUserById(userId)
+
+        if (authLookupError) {
+          if (
+            authLookupError.code === "user_not_found" ||
+            authLookupError.status === 404
+          ) {
+            return NextResponse.json({ ok: true, already_deleted: true })
+          }
+
+          return NextResponse.json(
+            {
+              error:
+                "Không thể xác minh trạng thái Auth; đã dừng và chưa thực hiện thêm thao tác nào.",
+            },
+            { status: 503 },
+          )
+        }
+
+        if (!authTarget.user) {
+          return NextResponse.json(
+            {
+              error:
+                "Auth không trả về người dùng hoặc lỗi xác nhận; đã dừng để tránh báo xóa thành công sai.",
+            },
+            { status: 502 },
+          )
+        }
+
+        return NextResponse.json(
+          {
+            error:
+              "Auth user vẫn tồn tại nhưng app_users bị thiếu; đã dừng để tránh xóa sai trạng thái.",
+          },
+          { status: 409 },
+        )
+      }
+
+      return NextResponse.json(
+        { error: "Tài khoản không còn tồn tại." },
+        { status: 404 },
+      )
+    }
+
+    if (target.role === "super_admin") {
+      return NextResponse.json(
+        { error: "Không thể xóa tài khoản super admin bằng thao tác thông thường." },
+        { status: 400 },
+      )
+    }
+
+    let normalizedTargetPhone = ""
+    if (target.phone) {
+      try {
+        normalizedTargetPhone = normalizeVietnamPhone(target.phone)
+      } catch {
+        normalizedTargetPhone = ""
+      }
+    }
+    let normalizedConfirmation = ""
+    if (confirmation === "XOA") {
+      normalizedConfirmation = "XOA"
+    } else {
+      try {
+        normalizedConfirmation = normalizeVietnamPhone(confirmation)
+      } catch {
+        normalizedConfirmation = ""
+      }
+    }
+
+    if (
+      normalizedConfirmation !== "XOA" &&
+      (!normalizedTargetPhone || normalizedConfirmation !== normalizedTargetPhone)
+    ) {
+      return NextResponse.json(
+        { error: "Hãy gõ XOA hoặc đúng số điện thoại để xác nhận." },
+        { status: 400 },
+      )
+    }
+
+    const { data: legacyProfile, error: profileError } = await auth.supabase
+      .from("profiles")
+      .select("id, member_id, full_name, phone, role, is_active, created_at, updated_at")
+      .eq("id", userId)
+      .maybeSingle()
+
+    if (profileError) throw profileError
+
+    const { data: auditRow, error: auditError } = await auth.supabase
+      .from("audit_logs")
+      .insert({
+        entity_type: "app_user",
+        entity_id: userId,
+        action: "delete_login_attempt",
+        before_data: {
+          app_user: target,
+          profile: legacyProfile,
+        },
+        after_data: { status: "pending" },
+        reason,
+        actor_id: auth.user.id,
+      })
+      .select("id")
+      .single()
+
+    if (auditError || !auditRow) {
+      return NextResponse.json(
+        { error: "Không thể tạo audit trail; tài khoản chưa bị xóa." },
+        { status: 500 },
+      )
+    }
+
+    const { error: deleteError } =
+      await auth.supabase.auth.admin.deleteUser(userId)
+
+    if (deleteError) {
+      await auth.supabase
+        .from("audit_logs")
+        .update({
+          action: "delete_login_failed",
+          after_data: { status: "failed", error: deleteError.message },
+        })
+        .eq("id", auditRow.id)
+
+      return NextResponse.json(
+        { error: "Không thể xóa tài khoản Auth; hồ sơ đăng nhập không bị dọn thủ công." },
+        { status: 400 },
+      )
+    }
+
+    const { error: auditUpdateError } = await auth.supabase
+      .from("audit_logs")
+      .update({
+        action: "delete_login_succeeded",
+        after_data: {
+          status: "succeeded",
+          member_history_preserved: true,
+        },
+      })
+      .eq("id", auditRow.id)
+
+    if (auditUpdateError) {
+      console.error("Deleted Auth user but could not finalize audit row", auditUpdateError)
+    }
+
+    return NextResponse.json({
+      ok: true,
+      audit_warning: auditUpdateError
+        ? "Tài khoản đã xóa; audit attempt đã được giữ nhưng chưa cập nhật trạng thái cuối."
+        : null,
+    })
+  } catch (error) {
+    console.error(error)
+    return NextResponse.json(
+      { error: "Không thể xóa tài khoản đăng nhập." },
+      { status: 500 },
+    )
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireSuperAdmin(request)
@@ -128,6 +346,35 @@ export async function POST(request: NextRequest) {
         { error: "Tài khoản hụi viên phải liên kết với một hụi viên." },
         { status: 400 },
       )
+    }
+
+    if (memberId) {
+      const { data: linkedMember, error: memberError } = await auth.supabase
+        .from("members")
+        .select("id, is_active")
+        .eq("id", memberId)
+        .maybeSingle()
+
+      if (memberError) {
+        return NextResponse.json(
+          { error: "Không thể xác minh trạng thái hụi viên; chưa tạo tài khoản." },
+          { status: 503 },
+        )
+      }
+
+      if (!linkedMember) {
+        return NextResponse.json(
+          { error: "Không tìm thấy hồ sơ hụi viên để liên kết." },
+          { status: 400 },
+        )
+      }
+
+      if (!linkedMember.is_active) {
+        return NextResponse.json(
+          { error: "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới." },
+          { status: 409 },
+        )
+      }
     }
 
     const { data: existingPhone } = await auth.supabase
@@ -179,7 +426,11 @@ export async function POST(request: NextRequest) {
       await auth.supabase.auth.admin.deleteUser(created.user.id)
 
       return NextResponse.json(
-        { error: profileError.message },
+        {
+          error: isInactiveMemberLinkError(profileError)
+            ? "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới."
+            : profileError.message,
+        },
         { status: 400 },
       )
     }
@@ -241,6 +492,27 @@ export async function PATCH(request: NextRequest) {
       const displayName = String(body.display_name ?? "").trim()
       const isActive = Boolean(body.is_active)
 
+      const { data: currentTarget, error: currentTargetError } =
+        await auth.supabase
+          .from("app_users")
+          .select("auth_user_id, role, member_id")
+          .eq("auth_user_id", userId)
+          .maybeSingle()
+
+      if (currentTargetError) {
+        return NextResponse.json(
+          { error: "Không thể xác minh trạng thái tài khoản; chưa cập nhật." },
+          { status: 503 },
+        )
+      }
+
+      if (!currentTarget) {
+        return NextResponse.json(
+          { error: "Không tìm thấy tài khoản cần cập nhật." },
+          { status: 404 },
+        )
+      }
+
       if (userId === auth.user.id) {
         if (role !== "super_admin") {
           return NextResponse.json(
@@ -257,6 +529,19 @@ export async function PATCH(request: NextRequest) {
         }
       }
 
+      if (
+        currentTarget.role === "super_admin" &&
+        (role !== "super_admin" || !isActive)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Không thể khóa hoặc hạ quyền super admin bằng thao tác thông thường.",
+          },
+          { status: 400 },
+        )
+      }
+
       if (!["super_admin", "admin", "member"].includes(role)) {
         return NextResponse.json(
           { error: "Vai trò không hợp lệ." },
@@ -271,6 +556,35 @@ export async function PATCH(request: NextRequest) {
         )
       }
 
+      if (memberId && memberId !== currentTarget.member_id) {
+        const { data: linkedMember, error: memberError } = await auth.supabase
+          .from("members")
+          .select("id, is_active")
+          .eq("id", memberId)
+          .maybeSingle()
+
+        if (memberError) {
+          return NextResponse.json(
+            { error: "Không thể xác minh trạng thái hụi viên; chưa cập nhật liên kết." },
+            { status: 503 },
+          )
+        }
+
+        if (!linkedMember) {
+          return NextResponse.json(
+            { error: "Không tìm thấy hồ sơ hụi viên để liên kết." },
+            { status: 400 },
+          )
+        }
+
+        if (!linkedMember.is_active) {
+          return NextResponse.json(
+            { error: "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới." },
+            { status: 409 },
+          )
+        }
+      }
+
       const { error } = await auth.supabase
         .from("app_users")
         .update({
@@ -282,7 +596,15 @@ export async function PATCH(request: NextRequest) {
         })
         .eq("auth_user_id", userId)
 
-      if (error) throw error
+      if (error) {
+        if (isInactiveMemberLinkError(error)) {
+          return NextResponse.json(
+            { error: "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới." },
+            { status: 409 },
+          )
+        }
+        throw error
+      }
 
       return NextResponse.json({ ok: true })
     }

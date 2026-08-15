@@ -23,6 +23,17 @@ import {
 import { createClient } from "@/lib/supabase/client"
 import { HuiPerformanceView } from "@/components/hui-performance-view"
 import { PeriodResultDialog } from "@/components/period-result-dialog"
+import {
+  HuiCodeBadge,
+  HuiEmptyState,
+  HuiPage,
+  HuiPageHeader,
+  HuiStatCard,
+  HuiStatusBadge,
+  HuiTableFrame,
+  huiTableCellClass,
+  huiTableHeadClass,
+} from "@/components/hui-design"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -88,6 +99,7 @@ type MemberRow = {
   id: string
   full_name: string
   phone: string | null
+  is_active: boolean
 }
 
 type GroupDetail = HuiGroupRow & {
@@ -340,7 +352,7 @@ export function DayHuiPage() {
           "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes, created_at, updated_at",
         )
         .order("period_number"),
-      supabase.from("members").select("id, full_name, phone"),
+      supabase.from("members").select("id, full_name, phone, is_active"),
     ])
 
     const firstError =
@@ -384,7 +396,7 @@ export function DayHuiPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+      <div className="hui-design-surface flex min-h-[60vh] items-center justify-center gap-2 text-sm font-medium text-muted-foreground" role="status">
         <LoaderCircle className="size-5 animate-spin" />
         Đang tải dây hụi...
       </div>
@@ -393,15 +405,15 @@ export function DayHuiPage() {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-5xl p-4 md:p-6">
-        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+      <HuiPage>
+        <Card className="flex flex-col items-center gap-3 rounded-lg border-destructive/30 p-8 text-center">
           <p className="font-medium text-destructive">{error}</p>
-          <Button variant="outline" onClick={() => void loadData()}>
+          <Button className="h-10" variant="outline" onClick={() => void loadData()}>
             <RefreshCw className="size-4" />
             Thử lại
           </Button>
         </Card>
-      </div>
+      </HuiPage>
     )
   }
 
@@ -456,130 +468,181 @@ function DayList({
   onSelect: (id: string) => void
   onCreate: () => void
 }) {
+  const rows = groups.map((group) => {
+    const groupShares = shares.filter((share) => share.group_id === group.id)
+    const groupPeriods = periods.filter((period) => period.group_id === group.id)
+    const finishedPeriods = groupPeriods.filter((period) =>
+      isFinishedPeriod(period.status),
+    ).length
+    const totalPeriods = Math.max(group.total_shares, groupPeriods.length, 1)
+    const progress = Math.min(
+      100,
+      Math.round((finishedPeriods / totalPeriods) * 100),
+    )
+    const activeShares = groupShares.filter(
+      (share) => share.status === "active",
+    ).length
+    const nextPeriod = groupPeriods
+      .filter((period) => period.status === "scheduled")
+      .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))[0]
+
+    return {
+      group,
+      finishedPeriods,
+      totalPeriods,
+      progress,
+      activeShares,
+      nextPeriod,
+    }
+  })
+
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">Dây hụi</h1>
-          <p className="text-sm text-muted-foreground">
-            {groups.length} dây
-          </p>
-        </div>
-        <Button onClick={onCreate}>
+    <HuiPage wide>
+      <HuiPageHeader
+        title="Dây hụi"
+        subtitle={`${groups.length} dây · Theo dõi tiến độ, chân hụi và lịch khui`}
+        actions={
+          <Button className="h-10 px-4 font-semibold" onClick={onCreate}>
           <Plus className="size-4" />
           Tạo dây hụi
-        </Button>
-      </div>
+          </Button>
+        }
+      />
 
       {groups.length === 0 ? (
-        <Card className="flex flex-col items-center gap-3 p-10 text-center">
-          <Users className="size-8 text-muted-foreground" />
-          <div>
-            <p className="font-medium">Chưa có dây hụi</p>
-            <p className="text-sm text-muted-foreground">
-              Tạo dây đầu tiên, hệ thống sẽ tự sinh toàn bộ lịch khui.
-            </p>
-          </div>
-          <Button onClick={onCreate}>
-            <Plus className="size-4" />
-            Tạo dây đầu tiên
-          </Button>
-        </Card>
+        <HuiEmptyState
+          icon={Users}
+          title="Chưa có dây hụi"
+          description="Tạo dây đầu tiên, hệ thống sẽ tự sinh toàn bộ lịch khui."
+          action={
+            <Button className="h-10" onClick={onCreate}>
+              <Plus className="size-4" />
+              Tạo dây đầu tiên
+            </Button>
+          }
+        />
       ) : (
-        <div className="space-y-3">
-          {groups.map((group) => {
-            const groupShares = shares.filter(
-              (share) => share.group_id === group.id,
-            )
-            const groupPeriods = periods.filter(
-              (period) => period.group_id === group.id,
-            )
-            const finishedPeriods = groupPeriods.filter((period) =>
-              isFinishedPeriod(period.status),
-            ).length
-            const totalPeriods = Math.max(
-              group.total_shares,
-              groupPeriods.length,
-              1,
-            )
-            const progress = Math.min(
-              100,
-              Math.round((finishedPeriods / totalPeriods) * 100),
-            )
-            const activeShares = groupShares.filter(
-              (share) => share.status === "active",
-            ).length
-            const nextPeriod = groupPeriods
-              .filter((period) => period.status === "scheduled")
-              .sort((a, b) =>
-                a.scheduled_date.localeCompare(b.scheduled_date),
-              )[0]
+        <>
+          <div className="hidden lg:block">
+            <HuiTableFrame>
+              <table className="w-full min-w-[1050px] text-sm">
+                <thead>
+                  <tr>
+                    {[
+                      "Mã dây",
+                      "Tên dây",
+                      "Mệnh giá",
+                      "Chu kỳ",
+                      "Tiến độ",
+                      "Chân đã gán",
+                      "Kỳ tiếp",
+                      "Trạng thái",
+                    ].map((heading) => (
+                      <th key={heading} className={huiTableHeadClass}>
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map(({ group, finishedPeriods, totalPeriods, progress, activeShares, nextPeriod }) => (
+                    <tr
+                      key={group.id}
+                      className="cursor-pointer transition-colors hover:bg-secondary/70 focus-within:bg-secondary/70"
+                      onClick={() => onSelect(group.id)}
+                    >
+                      <td className={huiTableCellClass}>
+                        <HuiCodeBadge code={group.code} />
+                      </td>
+                      <td className={`${huiTableCellClass} font-bold`}>{group.name}</td>
+                      <td className={`${huiTableCellClass} whitespace-nowrap text-right font-bold tabular-nums`}>
+                        {formatVND(group.contribution_amount)}
+                      </td>
+                      <td className={`${huiTableCellClass} whitespace-nowrap`}>
+                        {frequencyLabel(group.frequency_type, group.frequency_value)}
+                      </td>
+                      <td className={`${huiTableCellClass} min-w-40`}>
+                        <div className="flex items-center gap-2">
+                          <Progress value={progress} className="h-1.5 flex-1" />
+                          <span className="whitespace-nowrap text-xs font-bold tabular-nums">
+                            {finishedPeriods}/{totalPeriods}
+                          </span>
+                        </div>
+                      </td>
+                      <td className={`${huiTableCellClass} whitespace-nowrap text-right font-bold tabular-nums`}>
+                        {activeShares}/{group.total_shares}
+                      </td>
+                      <td className={`${huiTableCellClass} whitespace-nowrap tabular-nums`}>
+                        {nextPeriod ? formatDate(nextPeriod.scheduled_date) : "Chưa có"}
+                      </td>
+                      <td className={huiTableCellClass}>
+                        <HuiStatusBadge
+                          label={groupStatusLabel(group.status)}
+                          tone={group.status === "active" ? "success" : group.status === "cancelled" ? "danger" : "neutral"}
+                          icon={group.status === "active" ? CheckCircle2 : undefined}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </HuiTableFrame>
+          </div>
 
-            return (
+          <div className="grid gap-3 lg:hidden sm:grid-cols-2">
+            {rows.map(({ group, finishedPeriods, totalPeriods, progress, activeShares, nextPeriod }) => (
               <Card
                 key={group.id}
-                className="cursor-pointer p-4 transition-shadow hover:shadow-md"
+                className="cursor-pointer gap-0 rounded-lg p-4 transition-colors hover:bg-secondary/40"
                 onClick={() => onSelect(group.id)}
               >
-                <div className="flex items-start justify-between gap-4">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="mb-1 flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="font-mono text-xs">
-                        {group.code ?? "Chưa có mã"}
-                      </Badge>
-                      <h2 className="truncate text-base font-semibold">
-                        {group.name}
-                      </h2>
-                      <Badge variant="secondary" className="text-xs">
-                        {groupStatusLabel(group.status)}
-                      </Badge>
+                    <h2 className="truncate text-base font-bold">{group.name}</h2>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <HuiCodeBadge code={group.code} />
+                      <HuiStatusBadge
+                        label={groupStatusLabel(group.status)}
+                        tone={group.status === "active" ? "success" : group.status === "cancelled" ? "danger" : "neutral"}
+                      />
                     </div>
-
-                    <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                      <span>
-                        {formatVND(group.contribution_amount)}/chân
-                      </span>
-                      <span>
-                        {frequencyLabel(
-                          group.frequency_type,
-                          group.frequency_value,
-                        )}
-                      </span>
-                      <span>
-                        Giờ khui: {formatTime(group.opening_time)}
-                      </span>
-                      <span>
-                        Kỳ tiếp:{" "}
-                        {nextPeriod
-                          ? formatDate(nextPeriod.scheduled_date)
-                          : "Chưa có"}
-                      </span>
-                    </div>
-
-                    <div className="mb-1.5 flex items-center gap-2">
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary">
-                        <div
-                          className="h-full rounded-full bg-primary"
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                      <span className="w-20 text-right text-xs font-medium">
-                        {finishedPeriods}/{totalPeriods} kỳ
-                      </span>
-                    </div>
-
-                    <p className="text-xs font-medium text-status-green-fg">
-                      {activeShares}/{group.total_shares} chân đã gán
-                    </p>
                   </div>
-                  <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
+                  <p className="whitespace-nowrap text-base font-black text-primary tabular-nums">
+                    {formatVND(group.contribution_amount)}
+                  </p>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div className="rounded-md bg-secondary px-3 py-2">
+                    <p className="text-[11px] font-semibold text-muted-foreground">Chu kỳ</p>
+                    <p className="font-bold">{frequencyLabel(group.frequency_type, group.frequency_value)}</p>
+                  </div>
+                  <div className="rounded-md bg-secondary px-3 py-2">
+                    <p className="text-[11px] font-semibold text-muted-foreground">Kỳ tiếp</p>
+                    <p className="font-bold tabular-nums">{nextPeriod ? formatDate(nextPeriod.scheduled_date) : "Chưa có"}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center gap-2">
+                  <Progress value={progress} className="h-1.5 flex-1" />
+                  <span className="whitespace-nowrap text-xs font-bold tabular-nums">
+                    {finishedPeriods}/{totalPeriods} kỳ
+                  </span>
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-sm font-bold">
+                  <span className="text-status-green-fg tabular-nums">
+                    {activeShares}/{group.total_shares} chân đã gán
+                  </span>
+                  <span className="flex items-center gap-1 text-primary">
+                    Xem dây <ChevronRight className="size-4" />
+                  </span>
                 </div>
               </Card>
-            )
-          })}
-        </div>
+            ))}
+          </div>
+        </>
       )}
-    </div>
+    </HuiPage>
   )
 }
 
@@ -930,7 +993,7 @@ function GroupDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 p-4"
+      className="hui-design-surface fixed inset-0 z-50 flex items-end justify-center bg-foreground/30 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="group-dialog-title"
@@ -938,8 +1001,8 @@ function GroupDialog({
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <Card className="max-h-[92vh] w-full max-w-3xl overflow-y-auto p-5">
-        <div className="flex items-center justify-between">
+      <Card className="max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-b-none rounded-t-xl p-4 shadow-2xl sm:rounded-xl sm:p-5">
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
           <div>
             <h2
               id="group-dialog-title"
@@ -963,13 +1026,15 @@ function GroupDialog({
         </div>
 
         {scheduleLocked && (
-          <Card className="mt-4 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-            Dây đã có kỳ được khui hoặc chốt. Bạn vẫn sửa được
-            mã, tên, giờ khui, ghi chú và trạng thái. Ngày khui,
-            chu kỳ, số chân và tiền thảo lịch sử được khóa để bảo
-            vệ dữ liệu cũ. Giờ mới chỉ áp dụng cho các kỳ chưa
-            khui.
-          </Card>
+          <div
+            className="mt-4 rounded-lg border border-warning/30 bg-warning-soft p-3 text-sm leading-relaxed text-warning-foreground"
+            role="note"
+          >
+            Dây đã có kỳ được khui hoặc chốt. Các thông tin ảnh hưởng dữ liệu
+            cũ như ngày khui, chu kỳ, số chân và tiền thảo đã được khóa. Bạn
+            vẫn có thể sửa tên, mã dây, giờ khui, ghi chú và trạng thái. Giờ
+            khui mới chỉ áp dụng cho các kỳ chưa khui.
+          </div>
         )}
 
         <form
@@ -1377,6 +1442,10 @@ function ShareDialog({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  const activeMembers = members.filter((member) => member.is_active)
+  const selectableMembers = members.filter(
+    (member) => member.is_active || member.id === share?.member_id,
+  )
   const usedNumbers = new Set(
     day.shares
       .filter((item) => item.id !== share?.id)
@@ -1389,7 +1458,7 @@ function ShareDialog({
   ).filter((number) => !usedNumbers.has(number))
 
   const [memberId, setMemberId] = useState(
-    share?.member_id ?? members[0]?.id ?? "",
+    share?.member_id ?? activeMembers[0]?.id ?? "",
   )
   const [shareNumber, setShareNumber] = useState(
     String(
@@ -1436,6 +1505,24 @@ function ShareDialog({
 
     const supabase = createClient()
 
+    if (!share || memberId !== share.member_id) {
+      const { data: currentMember, error: memberError } = await supabase
+        .from("members")
+        .select("id, is_active")
+        .eq("id", memberId)
+        .maybeSingle()
+
+      if (memberError || !currentMember) {
+        setError("Không thể xác minh trạng thái hụi viên. Chưa lưu chân hụi.")
+        return
+      }
+
+      if (!currentMember.is_active) {
+        setError("Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới.")
+        return
+      }
+    }
+
     if (!share && addMode === "quick") {
       const count = Number(quantity)
 
@@ -1480,7 +1567,9 @@ function ShareDialog({
       if (saveError) {
         console.error(saveError)
         setError(
-          saveError.code === "23505"
+          saveError.message.includes("member_inactive_for_new_business")
+            ? "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới."
+            : saveError.code === "23505"
             ? "Một trong các số chân vừa chọn đã được sử dụng. Hãy thử lại."
             : "Không thể thêm nhanh các chân hụi.",
         )
@@ -1537,7 +1626,9 @@ function ShareDialog({
     if (saveError) {
       console.error(saveError)
       setError(
-        saveError.code === "23505"
+        saveError.message.includes("member_inactive_for_new_business")
+          ? "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới."
+          : saveError.code === "23505"
           ? "Số chân này đã tồn tại trong dây."
           : "Không thể lưu chân hụi.",
       )
@@ -1593,7 +1684,7 @@ function ShareDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-foreground/50 p-4"
+      className="hui-design-surface fixed inset-0 z-[60] flex items-end justify-center bg-foreground/30 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="share-dialog-title"
@@ -1603,8 +1694,8 @@ function ShareDialog({
         }
       }}
     >
-      <Card className="max-h-[90vh] w-full max-w-lg overflow-y-auto p-5">
-        <div className="flex items-center justify-between">
+      <Card className="max-h-[94vh] w-full max-w-lg overflow-y-auto rounded-b-none rounded-t-xl p-4 shadow-2xl sm:rounded-xl sm:p-5">
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
           <div>
             <h2
               id="share-dialog-title"
@@ -1645,7 +1736,7 @@ function ShareDialog({
               <option value="">
                 Chọn hụi viên
               </option>
-              {[...members]
+              {[...selectableMembers]
                 .sort((a, b) =>
                   a.full_name.localeCompare(
                     b.full_name,
@@ -1664,6 +1755,19 @@ function ShareDialog({
                   </option>
                 ))}
             </select>
+            {!share && activeMembers.length === 0 && (
+              <span className="text-xs font-normal text-muted-foreground">
+                Chưa có hụi viên đang hoạt động để thêm chân mới.
+              </span>
+            )}
+            {share &&
+              !members.find((member) => member.id === share.member_id)
+                ?.is_active && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  Hụi viên hiện tại đang tạm ngưng; bạn vẫn có thể giữ nguyên
+                  người này và sửa thông tin chân cũ.
+                </span>
+              )}
           </label>
 
           {!share && (
@@ -2060,7 +2164,7 @@ const eligibleShares = [...day.shares]
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-foreground/50 p-4"
+      className="hui-design-surface fixed inset-0 z-[70] flex items-end justify-center bg-foreground/30 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="period-dialog-title"
@@ -2073,8 +2177,8 @@ const eligibleShares = [...day.shares]
         }
       }}
     >
-      <Card className="max-h-[92vh] w-full max-w-xl overflow-y-auto p-5">
-        <div className="flex items-center justify-between">
+      <Card className="max-h-[94vh] w-full max-w-xl overflow-y-auto rounded-b-none rounded-t-xl p-4 shadow-2xl sm:rounded-xl sm:p-5">
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
           <div>
             <h2
               id="period-dialog-title"
@@ -2331,31 +2435,24 @@ function DayDetail({
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+    <HuiPage wide>
+      <HuiPageHeader
+        leading={
           <Button
             variant="ghost"
             size="icon"
             onClick={onBack}
-            className="size-8"
+            className="size-10"
+            aria-label="Về danh sách dây hụi"
           >
             <ArrowLeft className="size-4" />
           </Button>
-
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                variant="outline"
-                className="font-mono"
-              >
-                {day.code ?? "Chưa có mã"}
-              </Badge>
-              <h1 className="text-lg font-bold leading-tight">
-                {day.name}
-              </h1>
-            </div>
-            <p className="text-xs text-muted-foreground">
+        }
+        title={day.name}
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <HuiCodeBadge code={day.code} />
+            <span>
               {formatVND(
                 day.contribution_amount,
               )}
@@ -2369,50 +2466,48 @@ function DayDetail({
               {formatTime(
                 day.opening_time,
               )}
-            </p>
-          </div>
-        </div>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onEdit}
-        >
-          <Pencil className="size-4" />
-          Sửa dây
-        </Button>
-      </div>
+            </span>
+          </span>
+        }
+        actions={
+          <Button variant="outline" className="h-10 font-semibold" onClick={onEdit}>
+            <Pencil className="size-4" />
+            <span className="hidden sm:inline">Sửa dây</span>
+            <span className="sm:hidden">Sửa</span>
+          </Button>
+        }
+      />
 
       <Tabs defaultValue="tongquan">
-        <div className="overflow-x-auto pb-1">
-          <TabsList className="grid min-w-[500px] w-full grid-cols-5">
+        <div className="scrollbar-none overflow-x-auto overflow-y-hidden pb-1 md:overflow-x-visible">
+          <TabsList variant="line" className="w-max min-w-full justify-start gap-1 border-b border-border px-0 pb-1 md:grid md:grid-cols-5">
             <TabsTrigger
               value="tongquan"
-              className="text-xs"
+              className="h-10 px-3 text-sm font-semibold"
             >
               Tổng quan
             </TabsTrigger>
             <TabsTrigger
               value="chan"
-              className="text-xs"
+              className="h-10 px-3 text-sm font-semibold"
             >
               Chân hụi
             </TabsTrigger>
             <TabsTrigger
               value="lich"
-              className="text-xs"
+              className="h-10 px-3 text-sm font-semibold"
             >
               Lịch kỳ
             </TabsTrigger>
             <TabsTrigger
               value="lichsu"
-              className="text-xs"
+              className="h-10 px-3 text-sm font-semibold"
             >
               Lịch sử
             </TabsTrigger>
             <TabsTrigger
               value="hieuqua"
-              className="text-xs"
+              className="h-10 px-3 text-sm font-semibold"
             >
               Hiệu quả
             </TabsTrigger>
@@ -2464,21 +2559,16 @@ function DayDetail({
                   : "Chưa có",
               },
             ].map((item) => (
-              <Card
+              <HuiStatCard
                 key={item.label}
-                className="p-3"
-              >
-                <p className="text-xs text-muted-foreground">
-                  {item.label}
-                </p>
-                <p className="mt-0.5 text-base font-semibold">
-                  {item.value}
-                </p>
-              </Card>
+                label={item.label}
+                value={item.value}
+                tone={item.label === "Tiến độ" ? "info" : "neutral"}
+              />
             ))}
           </div>
 
-          <Card className="p-4">
+          <Card className="gap-0 rounded-lg p-4">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-medium">
                 Tiến độ khui
@@ -2493,40 +2583,35 @@ function DayDetail({
             />
           </Card>
 
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <Card className="p-3">
-              <p className="text-2xl font-bold text-status-green-fg">
-                {
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <HuiStatCard
+              label="Chân hoạt động"
+              tone="success"
+              value={
                   day.shares.filter(
                     (share) =>
                       share.status ===
                       "active",
                   ).length
-                }
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Chân hoạt động
-              </p>
-            </Card>
+              }
+            />
 
-            <Card className="p-3">
-              <p className="text-2xl font-bold text-status-red-fg">
-                {
+            <HuiStatCard
+              label="Chân tạm ngưng"
+              tone="danger"
+              value={
                   day.shares.filter(
                     (share) =>
                       share.status !==
                       "active",
                   ).length
-                }
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Chân tạm ngưng
-              </p>
-            </Card>
+              }
+            />
 
-            <Card className="p-3">
-              <p className="text-2xl font-bold text-primary">
-                {
+            <HuiStatCard
+              label="Đã hốt"
+              tone="info"
+              value={
                   new Set(
                     completedPeriods
                       .map(
@@ -2535,12 +2620,8 @@ function DayDetail({
                       )
                       .filter(Boolean),
                   ).size
-                }
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Đã hốt
-              </p>
-            </Card>
+              }
+            />
           </div>
         </TabsContent>
 
@@ -3064,6 +3145,6 @@ function DayDetail({
           }}
         />
       )}
-    </div>
+    </HuiPage>
   )
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import {
+  CheckCircle2,
   KeyRound,
   Layers,
   LoaderCircle,
@@ -11,10 +12,32 @@ import {
   WalletCards,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { calculateGroupPerformance } from "@/lib/hui-performance"
-import { AccountSecurity } from "@/components/account/account-security"
+import {
+  calculateGroupPerformance,
+  getValidPerformancePeriods,
+} from "@/lib/hui-performance"
+import { ChangePinForm } from "@/components/account/account-security"
+import {
+  AppPage,
+  EmptyState,
+  ErrorState,
+  HuiCodeBadge,
+  LoadingState,
+  MoneyValue,
+  PageHeader,
+  SectionHeader,
+  StatCard,
+  StatusBadge,
+} from "@/components/hui-design"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 type Profile = {
   auth_user_id: string
@@ -72,6 +95,77 @@ type PaymentRow = {
   direction: "collect" | "pay"
   amount: number
   status: string
+  source_period_id: string | null
+}
+
+type ReceiptSource = {
+  periodId: string
+  groupCode: string | null
+  groupName: string
+  periodNumber: number
+  scheduledDate: string
+}
+
+type ReceiptSourceContext = {
+  kind: "single" | "aggregate" | "legacy"
+  sources: ReceiptSource[]
+  hasUnknownSource: boolean
+}
+
+type PageResult<T> = {
+  data: T[] | null
+  error: unknown
+}
+
+const PAGE_SIZE = 1000
+const FILTER_BATCH_SIZE = 100
+
+function chunk<T>(items: T[], size: number) {
+  const result: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size))
+  }
+  return result
+}
+
+async function fetchAllPages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>,
+) {
+  const result: T[] = []
+  let from = 0
+
+  while (true) {
+    const { data, error } = await fetchPage(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+
+    const rows = data ?? []
+    result.push(...rows)
+    if (rows.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+
+  return result
+}
+
+async function fetchRowsByIds<T>(
+  ids: string[],
+  fetchPage: (
+    batchIds: string[],
+    from: number,
+    to: number,
+  ) => PromiseLike<PageResult<T>>,
+) {
+  const result: T[] = []
+
+  for (const batchIds of chunk(ids, FILTER_BATCH_SIZE)) {
+    result.push(
+      ...(await fetchAllPages<T>((from, to) =>
+        fetchPage(batchIds, from, to),
+      )),
+    )
+  }
+
+  return result
 }
 
 function formatVND(value: number) {
@@ -90,6 +184,7 @@ function formatDate(value: string) {
 export function MemberPortalPage({ profile }: { profile: Profile }) {
   const [member, setMember] = useState<MemberRow | null>(null)
   const [shares, setShares] = useState<ShareRow[]>([])
+  const [groupShares, setGroupShares] = useState<ShareRow[]>([])
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [periods, setPeriods] = useState<PeriodRow[]>([])
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
@@ -97,6 +192,8 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [showPin, setShowPin] = useState(false)
+  const [pinMessage, setPinMessage] = useState("")
+  const [pinError, setPinError] = useState("")
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -108,65 +205,96 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     setError("")
     const supabase = createClient()
 
-    const [
-      memberResult,
-      sharesResult,
-      groupsResult,
-      periodsResult,
-      receiptsResult,
-      paymentsResult,
-    ] = await Promise.all([
-      supabase
-        .from("members")
-        .select("id, full_name, phone")
-        .eq("id", profile.member_id)
-        .single(),
-      supabase
-        .from("hui_shares")
-        .select("id, group_id, member_id, share_number, status"),
-      supabase
-        .from("hui_groups")
-        .select(
-          "id, code, name, contribution_amount, total_shares, status",
+    try {
+      const [memberResult, ownShares, receiptRows] = await Promise.all([
+        supabase
+          .from("members")
+          .select("id, full_name, phone")
+          .eq("id", profile.member_id)
+          .single(),
+        fetchAllPages<ShareRow>((from, to) =>
+          supabase
+            .from("hui_shares")
+            .select("id, group_id, member_id, share_number, status")
+            .eq("member_id", profile.member_id)
+            .order("id")
+            .range(from, to),
         ),
-      supabase
-        .from("hui_periods")
-        .select(
-          "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, status",
+        fetchAllPages<ReceiptRow>((from, to) =>
+          supabase
+            .from("hui_receipts")
+            .select(
+              "id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
+            )
+            .eq("member_id", profile.member_id)
+            .order("receipt_date", { ascending: false })
+            .order("id", { ascending: false })
+            .range(from, to),
         ),
-      supabase
-        .from("hui_receipts")
-        .select(
-          "id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
-        )
-        .order("receipt_date", { ascending: false }),
-      supabase
-        .from("receipt_payments")
-        .select("id, receipt_id, direction, amount, status"),
-    ])
+      ])
 
-    const firstError =
-      memberResult.error ??
-      sharesResult.error ??
-      groupsResult.error ??
-      periodsResult.error ??
-      receiptsResult.error ??
-      paymentsResult.error
+      if (memberResult.error) throw memberResult.error
 
-    if (firstError) {
-      console.error(firstError)
+      const groupIds = [...new Set(ownShares.map((share) => share.group_id))]
+      const receiptIds = receiptRows.map((receipt) => receipt.id)
+
+      const [groupRows, allGroupShares, periodRows, paymentRows] =
+        await Promise.all([
+          fetchRowsByIds<GroupRow>(groupIds, (ids, from, to) =>
+            supabase
+              .from("hui_groups")
+              .select(
+                "id, code, name, contribution_amount, total_shares, status",
+              )
+              .in("id", ids)
+              .order("id")
+              .range(from, to),
+          ),
+          fetchRowsByIds<ShareRow>(groupIds, (ids, from, to) =>
+            supabase
+              .from("hui_shares")
+              .select("id, group_id, member_id, share_number, status")
+              .in("group_id", ids)
+              .order("id")
+              .range(from, to),
+          ),
+          fetchRowsByIds<PeriodRow>(groupIds, (ids, from, to) =>
+            supabase
+              .from("hui_periods")
+              .select(
+                "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, status",
+              )
+              .in("group_id", ids)
+              .order("group_id")
+              .order("period_number")
+              .range(from, to),
+          ),
+          fetchRowsByIds<PaymentRow>(receiptIds, (ids, from, to) =>
+            supabase
+              .from("receipt_payments")
+              .select(
+                "id, receipt_id, direction, amount, status, source_period_id",
+              )
+              .in("receipt_id", ids)
+              .eq("status", "active")
+              .order("id")
+              .range(from, to),
+          ),
+        ])
+
+      setMember((memberResult.data as MemberRow | null) ?? null)
+      setShares(ownShares)
+      setGroupShares(allGroupShares)
+      setGroups(groupRows)
+      setPeriods(periodRows)
+      setReceipts(receiptRows)
+      setPayments(paymentRows)
+    } catch (caught) {
+      console.error(caught)
       setError("Không thể tải đầy đủ dữ liệu của bạn. Vui lòng thử lại.")
+    } finally {
       setLoading(false)
-      return
     }
-
-    setMember((memberResult.data as MemberRow | null) ?? null)
-    setShares((sharesResult.data ?? []) as ShareRow[])
-    setGroups((groupsResult.data ?? []) as GroupRow[])
-    setPeriods((periodsResult.data ?? []) as PeriodRow[])
-    setReceipts((receiptsResult.data ?? []) as ReceiptRow[])
-    setPayments((paymentsResult.data ?? []) as PaymentRow[])
-    setLoading(false)
   }
 
   const summary = useMemo(() => {
@@ -211,9 +339,14 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     >()
 
     for (const group of groups) {
-      const groupShares = shares.filter((share) => share.group_id === group.id)
+      const allSharesInGroup = groupShares.filter(
+        (share) => share.group_id === group.id,
+      )
       const groupPeriods = periods.filter((period) => period.group_id === group.id)
-      const performance = calculateGroupPerformance(groupShares, groupPeriods)
+      const performance = calculateGroupPerformance(
+        allSharesInGroup,
+        groupPeriods,
+      )
 
       map.set(
         group.id,
@@ -223,7 +356,65 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     }
 
     return map
-  }, [groups, periods, profile.member_id, shares])
+  }, [groupShares, groups, periods, profile.member_id])
+
+  const receiptSourcesById = useMemo(() => {
+    const groupById = new Map(groups.map((group) => [group.id, group]))
+    const periodById = new Map(periods.map((period) => [period.id, period]))
+    const paymentsByReceipt = new Map<string, PaymentRow[]>()
+
+    for (const payment of payments) {
+      const current = paymentsByReceipt.get(payment.receipt_id) ?? []
+      current.push(payment)
+      paymentsByReceipt.set(payment.receipt_id, current)
+    }
+
+    const result = new Map<string, ReceiptSourceContext>()
+
+    for (const receipt of receipts) {
+      const receiptPayments = paymentsByReceipt.get(receipt.id) ?? []
+      let hasUnknownSource = receiptPayments.length === 0
+      const sourceByPeriodId = new Map<string, ReceiptSource>()
+
+      for (const payment of receiptPayments) {
+        if (!payment.source_period_id) {
+          hasUnknownSource = true
+          continue
+        }
+
+        const period = periodById.get(payment.source_period_id)
+        const group = period ? groupById.get(period.group_id) : null
+        if (!period || !group) {
+          hasUnknownSource = true
+          continue
+        }
+
+        sourceByPeriodId.set(period.id, {
+          periodId: period.id,
+          groupCode: group.code,
+          groupName: group.name,
+          periodNumber: period.period_number,
+          scheduledDate: period.scheduled_date,
+        })
+      }
+
+      const sources = [...sourceByPeriodId.values()].sort(
+        (a, b) =>
+          a.scheduledDate.localeCompare(b.scheduledDate) ||
+          a.periodNumber - b.periodNumber,
+      )
+      const kind =
+        sources.length === 0
+          ? "legacy"
+          : sources.length === 1 && !hasUnknownSource
+            ? "single"
+            : "aggregate"
+
+      result.set(receipt.id, { kind, sources, hasUnknownSource })
+    }
+
+    return result
+  }, [groups, payments, periods, receipts])
 
   async function logout() {
     await createClient().auth.signOut()
@@ -231,47 +422,43 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center gap-2">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang tải sổ hụi của bạn...
-      </div>
-    )
+    return <LoadingState label="Đang tải sổ hụi của bạn..." />
   }
 
   if (error) {
     return (
-      <div className="mx-auto max-w-xl p-4">
-        <Card className="p-6 text-center">
-          <p className="font-medium text-destructive">{error}</p>
-          <Button
-            className="mt-3"
+      <AppPage className="max-w-xl">
+        <ErrorState description={error} action={<Button
             variant="outline"
             onClick={() => void loadData()}
           >
             Thử lại
-          </Button>
-        </Card>
-      </div>
+          </Button>} />
+      </AppPage>
     )
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 p-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Sổ hụi của tôi</p>
-            <h1 className="font-bold">
-              {member?.full_name ?? profile.display_name ?? profile.email ?? "Hụi viên"}
-            </h1>
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-2.5">
+            <div className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
+              <Layers className="size-4" />
+            </div>
+            <div>
+              <p className="font-bold">Sổ Hụi</p>
+              <p className="text-xs text-muted-foreground">Cổng thông tin hụi viên</p>
+            </div>
           </div>
-
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setShowPin((value) => !value)}
+              onClick={() => {
+                setPinError("")
+                setShowPin(true)
+              }}
             >
               <KeyRound className="size-4" />
               Đổi mã
@@ -284,41 +471,71 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-4 p-4 md:p-6">
-        {showPin && <AccountSecurity />}
+      <AppPage className="max-w-5xl">
+        <PageHeader
+          title={member?.full_name ?? profile.display_name ?? "Hụi viên"}
+          subtitle={member?.phone ? `Số điện thoại: ${member.phone}` : "Tổng quan sổ hụi cá nhân"}
+        />
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Stat icon={Layers} label="Dây tham gia" value={summary.groupCount} />
-          <Stat icon={UserRound} label="Tổng chân" value={summary.totalShares} />
-          <Stat icon={UserRound} label="Chân sống" value={summary.liveShares} />
-          <Stat icon={UserRound} label="Chân đã hốt" value={summary.deadShares} />
+        {pinMessage && (
+          <Card className="flex items-center gap-2 border-success/25 bg-success-soft p-3 text-success-foreground">
+            <CheckCircle2 className="size-4 shrink-0" />
+            <p className="text-sm font-medium">{pinMessage}</p>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 min-[340px]:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Dây tham gia" value={summary.groupCount} tone="info" />
+          <StatCard label="Tổng chân" value={summary.totalShares} />
+          <StatCard label="Chân sống" value={summary.liveShares} tone="success" />
+          <StatCard label="Chân đã hốt" value={summary.deadShares} tone="warning" />
         </div>
 
         <Card className="p-4">
-          <div className="flex items-center gap-2">
-            <WalletCards className="size-5" />
-            <h2 className="font-semibold">Tiền đã xác nhận</h2>
-          </div>
+          <SectionHeader
+            title="Tiền đã xác nhận"
+            description="Tổng tiền thực tế đã được chủ hụi ghi nhận"
+            icon={WalletCards}
+          />
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <Money label="Đã đóng" value={summary.collected} />
-            <Money label="Đã nhận" value={summary.paid} />
+          <div className="mt-4 grid grid-cols-1 gap-3 min-[340px]:grid-cols-2">
+            <div className="min-w-0 rounded-lg border border-success/20 bg-success-soft p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-success-foreground">Đã đóng</p>
+              <MoneyValue amount={summary.collected} tone="collect" size="lg" className="mt-1 block max-w-full overflow-x-auto" />
+            </div>
+            <div className="min-w-0 rounded-lg border border-primary/20 bg-primary-soft p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary">Đã nhận</p>
+              <MoneyValue amount={summary.paid} tone="neutral" size="lg" className="mt-1 block max-w-full overflow-x-auto text-primary" />
+            </div>
           </div>
         </Card>
 
-        <div>
-          <h2 className="font-semibold">Các dây đang tham gia</h2>
-          <div className="mt-2 space-y-2">
+        <section className="space-y-3">
+          <SectionHeader title="Các dây đang tham gia" icon={Layers} />
+          {groups.every((group) => !shares.some((share) => share.group_id === group.id)) ? (
+            <EmptyState icon={Layers} title="Chưa tham gia dây hụi nào" />
+          ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
             {groups.map((group) => {
-              const groupShares = shares.filter(
+              const memberGroupShares = shares.filter(
                 (share) => share.group_id === group.id,
               )
-              if (groupShares.length === 0) return null
+              if (memberGroupShares.length === 0) return null
 
               const groupPeriods = periods.filter(
                 (period) => period.group_id === group.id,
               )
-              const ownIds = new Set(groupShares.map((share) => share.id))
+              const validPeriods = getValidPerformancePeriods(groupPeriods)
+              const latestValidPeriod = validPeriods.at(-1)?.period_number ?? 0
+              const totalPeriods = groupPeriods.length
+              const periodProgress = validPeriods.length
+                ? `Đã khui đến kỳ ${latestValidPeriod}/${totalPeriods}`
+                : totalPeriods > 0
+                  ? `Chưa khui · 0/${totalPeriods} kỳ`
+                  : "Chưa có lịch kỳ"
+              const ownIds = new Set(
+                memberGroupShares.map((share) => share.id),
+              )
               const won = groupPeriods.filter(
                 (period) =>
                   period.winner_share_id &&
@@ -331,19 +548,28 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
 
               return (
                 <Card key={group.id} className="p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-md border px-2 py-0.5 font-mono text-xs">
-                      {group.code || "CHƯA-MÃ"}
-                    </span>
-                    <p className="font-semibold">{group.name}</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <HuiCodeBadge code={group.code} />
+                      <p className="mt-2 break-words text-base font-bold leading-snug">
+                        {group.name}
+                      </p>
+                    </div>
+                    <StatusBadge
+                      label={group.status === "active" ? "Đang hoạt động" : group.status}
+                      tone={group.status === "active" ? "success" : "neutral"}
+                    />
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {formatVND(group.contribution_amount)}/chân ·{" "}
-                    {groupShares.length} chân · đã hốt {won}
+                    {memberGroupShares.length} chân · đã hốt {won}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {periodProgress}
                   </p>
 
                   {performance && (
-                    <div className="mt-3 rounded-md bg-muted/50 p-3">
+                    <div className="mt-3 rounded-lg border border-border bg-muted/50 p-3">
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-3 text-left"
@@ -351,22 +577,23 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                           setExpandedGroupId(expanded ? null : group.id)
                         }
                       >
-                        <div>
+                        <div className="min-w-0">
                           <p className="text-xs text-muted-foreground">
                             Hiệu quả thăm hiện tại
                           </p>
-                          <p
-                            className={`mt-0.5 font-bold ${
-                              performance.performanceAmount < 0
-                                ? "text-destructive"
-                                : performance.performanceAmount > 0
-                                  ? "text-primary"
-                                  : ""
-                            }`}
-                          >
-                            {formatVND(performance.performanceAmount)}
-                            {performance.liveShares > 0 ? " · tạm tính" : ""}
-                          </p>
+                          <MoneyValue
+                            amount={Math.abs(performance.performanceAmount)}
+                            prefix={performance.performanceAmount < 0 ? "−" : performance.performanceAmount > 0 ? "+" : ""}
+                            tone={performance.performanceAmount < 0 ? "pay" : performance.performanceAmount > 0 ? "collect" : "neutral"}
+                            className="mt-0.5 block max-w-full overflow-x-auto"
+                          />
+                          {performance.liveShares > 0 && (
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {validPeriods.length
+                                ? `Tạm tính đến hết kỳ ${latestValidPeriod}/${totalPeriods}`
+                                : "Chưa có kỳ đã khui để tính"}
+                            </p>
+                          )}
                         </div>
                         <span className="text-xs font-medium text-primary">
                           {expanded ? "Thu gọn" : "Xem chi tiết"}
@@ -441,15 +668,16 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
               )
             })}
           </div>
-        </div>
+          )}
+        </section>
 
-        <div>
-          <div className="flex items-center gap-2">
-            <ReceiptText className="size-5" />
-            <h2 className="font-semibold">Phiếu gần đây</h2>
-          </div>
+        <section className="space-y-3">
+          <SectionHeader title="Phiếu gần đây" icon={ReceiptText} />
 
-          <div className="mt-2 space-y-2">
+          {receipts.length === 0 ? (
+            <EmptyState icon={ReceiptText} title="Chưa có phiếu nào" />
+          ) : (
+          <div className="grid gap-3 md:grid-cols-2">
             {receipts.slice(0, 12).map((receipt) => {
               const activePayments = payments.filter(
                 (payment) =>
@@ -466,19 +694,63 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                 Number(receipt.source_total_pay || 0) -
                 Number(receipt.source_total_receive || 0) +
                 Number(receipt.settlement_amount || 0)
+              const sourceContext = receiptSourcesById.get(receipt.id) ?? {
+                kind: "legacy" as const,
+                sources: [],
+                hasUnknownSource: true,
+              }
 
               return (
-                <Card key={receipt.id} className="p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium">
-                        {formatDate(receipt.receipt_date)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {receipt.status}
-                      </p>
+                <Card key={receipt.id} className="p-4">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+                    <div className="min-w-0">
+                      {sourceContext.kind === "single" ? (
+                        <>
+                          <p className="break-words font-bold">
+                            {sourceContext.sources[0].groupCode || "Chưa có mã"}
+                            {" · "}
+                            {sourceContext.sources[0].groupName}
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Kỳ {sourceContext.sources[0].periodNumber} ·{" "}
+                            {formatDate(
+                              sourceContext.sources[0].scheduledDate,
+                            )}
+                          </p>
+                        </>
+                      ) : sourceContext.kind === "aggregate" ? (
+                        <>
+                          <p className="font-bold">Phiếu tổng hợp</p>
+                          <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                            {sourceContext.sources.map((source) => (
+                              <p key={source.periodId} className="break-words">
+                                {source.groupCode || source.groupName} · Kỳ{" "}
+                                {source.periodNumber} ·{" "}
+                                {formatDate(source.scheduledDate)}
+                              </p>
+                            ))}
+                            {sourceContext.hasUnknownSource && (
+                              <p>Dữ liệu cũ chưa xác định dây/kỳ</p>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-bold">
+                            Dữ liệu cũ chưa xác định dây/kỳ
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Ngày phiếu: {formatDate(receipt.receipt_date)}
+                          </p>
+                        </>
+                      )}
+                      <StatusBadge
+                        label={receipt.status === "paid" ? "Đã thanh toán" : receipt.status === "open" ? "Đang mở" : receipt.status === "cancelled" ? "Đã hủy" : receipt.status}
+                        tone={receipt.status === "paid" ? "success" : receipt.status === "cancelled" ? "danger" : "warning"}
+                        className="mt-2"
+                      />
                     </div>
-                    <p className="font-bold">
+                    <p className="max-w-[12rem] break-words text-right text-sm font-bold tabular-nums sm:max-w-none">
                       {actuallyCollected > 0
                         ? `Đã đóng ${formatVND(actuallyCollected)}`
                         : actuallyPaid > 0
@@ -494,35 +766,33 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
               )
             })}
           </div>
-        </div>
-      </main>
-    </div>
-  )
-}
+          )}
+        </section>
 
-function Stat({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof Layers
-  label: string
-  value: number
-}) {
-  return (
-    <Card className="p-4">
-      <Icon className="size-4 text-muted-foreground" />
-      <p className="mt-2 text-xs text-muted-foreground">{label}</p>
-      <p className="text-xl font-bold">{value}</p>
-    </Card>
-  )
-}
-
-function Money({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md bg-muted/50 p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 font-bold">{formatVND(value)}</p>
+        <Dialog open={showPin} onOpenChange={setShowPin}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Đổi mã đăng nhập</DialogTitle>
+              <DialogDescription>
+                Tạo mã PIN mới gồm đúng 4 chữ số.
+              </DialogDescription>
+            </DialogHeader>
+            <ChangePinForm
+              onChanged={(message) => {
+                setPinMessage(message)
+                setPinError("")
+                setShowPin(false)
+              }}
+              onError={setPinError}
+            />
+            {pinError && (
+              <p className="text-sm text-destructive" role="alert">
+                {pinError}
+              </p>
+            )}
+          </DialogContent>
+        </Dialog>
+      </AppPage>
     </div>
   )
 }

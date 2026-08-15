@@ -112,7 +112,7 @@ export default function Home() {
       {page === "tongguan" && <TongQuanPage onNavigate={setPage} />}
       {page === "khui" && <KhuiHomNayPage />}
       {page === "day" && <DayHuiPage />}
-      {page === "huivien" && <HuiVienPage />}
+      {page === "huivien" && <HuiVienPage currentRole={profile.role} />}
       {page === "phieu" && <PhieuThuChiPage />}
       {page === "candoi" && <CanDoiPage />}
       {page === "caidat" && <CaiDatPage />}

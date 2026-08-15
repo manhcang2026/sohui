@@ -39,7 +39,7 @@ export default function SupabaseTestPage() {
   }, [])
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-background p-6 text-foreground">
       <div className="mx-auto max-w-xl rounded-xl border bg-white p-6 shadow-sm">
         <h1 className="text-2xl font-bold">Kiểm tra Supabase</h1>
 
@@ -47,7 +47,7 @@ export default function SupabaseTestPage() {
           {status.message}
         </p>
 
-        <p className="mt-4 text-sm text-slate-500">
+        <p className="mt-4 text-sm text-muted-foreground">
           Trang này chỉ kiểm tra kết nối, chưa đọc hoặc ghi dữ liệu khách hàng.
         </p>
       </div>

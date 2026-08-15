@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react"
 import { LoaderCircle, Save, Settings2 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { AccountSecurity } from "@/components/account/account-security"
+import { AppPage, LoadingState, PageHeader } from "@/components/hui-design"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -100,25 +101,16 @@ export function CaiDatPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
-        Đang tải cài đặt...
-      </div>
-    )
+    return <LoadingState label="Đang tải cài đặt..." />
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
-      <div>
-        <div className="flex items-center gap-2">
-          <Settings2 className="size-5" />
-          <h1 className="text-xl font-bold">Cài đặt</h1>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Thông tin chủ hụi, tài khoản nhận tiền và phân quyền.
-        </p>
-      </div>
+    <AppPage>
+      <PageHeader
+        title="Cài đặt"
+        subtitle="Thông tin chủ hụi, tài khoản nhận tiền và phân quyền."
+        leading={<Settings2 className="mt-0.5 size-5 text-primary" />}
+      />
 
       <form className="space-y-4" onSubmit={submit}>
         <Card className="space-y-4 p-4">
@@ -219,6 +211,6 @@ export function CaiDatPage() {
       </form>
 
       <AccountSecurity />
-    </div>
+    </AppPage>
   )
 }

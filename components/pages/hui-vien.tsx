@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react"
 import {
@@ -17,14 +18,47 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   UserRound,
+  UserRoundCheck,
+  UserRoundX,
   WalletCards,
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  HuiEmptyState,
+  HuiPage,
+  HuiPageHeader,
+  HuiStatCard,
+  HuiStatusBadge,
+  HuiTableFrame,
+  huiTableCellClass,
+  huiTableHeadClass,
+} from "@/components/hui-design"
 import { createClient } from "@/lib/supabase/client"
+import { normalizeVietnamPhone } from "@/lib/auth/passcode"
+import { formatDate } from "@/components/pages/phieu/utils"
+import {
+  calculateMemberMoneyByReceipt,
+  resolvePeriodTiming,
+  type CashFlowLevel,
+  type CollectObligation,
+  type DerivedMemberObligation,
+  type DerivedObligationPeriod,
+  type MemberPaymentRow,
+  type MemberReceiptRow,
+} from "@/components/pages/hui-vien-financials"
 
 export type Member = {
   id: string
@@ -47,6 +81,7 @@ type GroupRow = {
   name: string
   contribution_amount: number
   total_shares: number
+  opening_time: string | null
   status: string
 }
 
@@ -63,28 +98,17 @@ type PeriodRow = {
   group_id: string
   period_number: number
   scheduled_date: string
+  scheduled_at: string | null
+  opened_at: string | null
   winner_share_id: string | null
   bid_amount: number
   fee_amount: number
   status: string
 }
 
-type ReceiptRow = {
-  id: string
-  member_id: string
-  receipt_date: string
-  settlement_amount: number
-  status: string
-}
+type ReceiptRow = MemberReceiptRow
 
-type PaymentRow = {
-  id: string
-  receipt_id: string
-  direction: "collect" | "pay"
-  amount: number
-  status: "active" | "cancelled"
-  source_period_id: string | null
-}
+type PaymentRow = MemberPaymentRow
 
 type MemberForm = Omit<Member, "id" | "created_at" | "updated_at">
 
@@ -97,7 +121,24 @@ type GroupMemberStat = {
   completedPeriods: number
 }
 
-type RiskLevel = "normal" | "watch" | "high" | "very_high"
+type StaffRole = "super_admin" | "admin"
+
+type MemberDeletePreflight = {
+  member: Pick<Member, "id" | "full_name" | "phone" | "is_active">
+  counts: {
+    hui_shares: number
+    hui_receipts: number
+    receipt_payments: number
+    receipts: number
+    transactions: number
+    app_users: number
+    profiles: number
+  }
+  has_business_history: boolean
+  has_login_link: boolean
+  member_delete_enabled: boolean
+  member_delete_blocker: string | null
+}
 
 type MemberProfile = {
   member: Member
@@ -114,8 +155,88 @@ type MemberProfile = {
   overdue: number
   totalReceived: number
   totalContributed: number
-  risk: RiskLevel
-  riskReasons: string[]
+  cashFlowDifference: number
+  cashFlowLevel: CashFlowLevel
+  cashFlowReason: string
+  collectObligations: CollectObligation[]
+}
+
+const PAGE_SIZE = 1000
+const FILTER_BATCH_SIZE = 100
+
+function chunk<T>(items: T[], size: number) {
+  const result: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size))
+  }
+  return result
+}
+
+async function fetchAllPages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{
+    data: T[] | null
+    error: unknown
+  }>,
+) {
+  const result: T[] = []
+  let from = 0
+
+  while (true) {
+    const { data, error } = await fetchPage(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+
+    const rows = data ?? []
+    result.push(...rows)
+    if (rows.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+
+  return result
+}
+
+async function fetchReceiptsForMemberIds(memberIds: string[]) {
+  const supabase = createClient()
+  const result: ReceiptRow[] = []
+
+  for (const ids of chunk(memberIds, FILTER_BATCH_SIZE)) {
+    result.push(
+      ...(await fetchAllPages<ReceiptRow>((from, to) =>
+        supabase
+          .from("hui_receipts")
+          .select(
+            "id, member_id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
+          )
+          .in("member_id", ids)
+          .order("id", { ascending: true })
+          .range(from, to),
+      )),
+    )
+  }
+
+  return result
+}
+
+async function fetchActivePaymentsForReceiptIds(receiptIds: string[]) {
+  const supabase = createClient()
+  const result: PaymentRow[] = []
+
+  for (const ids of chunk(receiptIds, FILTER_BATCH_SIZE)) {
+    result.push(
+      ...(await fetchAllPages<PaymentRow>((from, to) =>
+        supabase
+          .from("receipt_payments")
+          .select(
+            "id, receipt_id, direction, amount, status, source_period_id",
+          )
+          .in("receipt_id", ids)
+          .eq("status", "active")
+          .order("id", { ascending: true })
+          .range(from, to),
+      )),
+    )
+  }
+
+  return result
 }
 
 const EMPTY_FORM: MemberForm = {
@@ -136,6 +257,47 @@ function formatVND(value: number) {
     currency: "VND",
     maximumFractionDigits: 0,
   }).format(Number(value || 0))
+}
+
+function formatSignedVND(value: number) {
+  if (value > 0) return `+${formatVND(value)}`
+  if (value < 0) return `−${formatVND(Math.abs(value))}`
+  return formatVND(0)
+}
+
+function formatVietnamDateTime(value: number) {
+  return new Intl.DateTimeFormat("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour: "2-digit",
+    minute: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour12: false,
+  }).format(new Date(value))
+}
+
+function formatProfileDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "Chưa cập nhật"
+
+  return new Intl.DateTimeFormat("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date)
+}
+
+function getMemberCardContactLines(member: Member) {
+  const phone = member.phone?.trim() ?? ""
+  const zalo = member.zalo_phone?.trim() ?? ""
+
+  if (!phone && !zalo) return ["Chưa có thông tin liên hệ"]
+  if (phone && !zalo) return [phone]
+  if (!phone && zalo) return [`Zalo: ${zalo}`]
+
+  return [phone, phone === zalo ? "Zalo: cùng số" : `Zalo: ${zalo}`]
 }
 
 function isCompleted(status: string) {
@@ -205,36 +367,43 @@ function calculatePeriodMemberNets(
   return result
 }
 
-function riskMeta(level: RiskLevel) {
-  if (level === "very_high") {
+function cashFlowMeta(level: CashFlowLevel) {
+  if (level === "alarm") {
     return {
-      label: "Rủi ro rất cao",
-      className: "bg-destructive/10 text-destructive",
+      label: "Báo động",
       Icon: ShieldAlert,
+      tone: "danger" as const,
     }
   }
   if (level === "high") {
     return {
       label: "Rủi ro cao",
-      className: "bg-status-red-bg text-status-red-fg",
       Icon: AlertTriangle,
+      tone: "warning" as const,
     }
   }
   if (level === "watch") {
     return {
       label: "Cần chú ý",
-      className: "bg-status-yellow-bg text-status-yellow-fg",
       Icon: AlertTriangle,
+      tone: "warning" as const,
+    }
+  }
+  if (level === "good") {
+    return {
+      label: "Tốt",
+      Icon: ShieldCheck,
+      tone: "success" as const,
     }
   }
   return {
     label: "Bình thường",
-    className: "bg-status-green-bg text-status-green-fg",
     Icon: ShieldCheck,
+    tone: "info" as const,
   }
 }
 
-export function HuiVienPage() {
+export function HuiVienPage({ currentRole }: { currentRole: StaffRole }) {
   const [members, setMembers] = useState<Member[]>([])
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [shares, setShares] = useState<ShareRow[]>([])
@@ -246,73 +415,85 @@ export function HuiVienPage() {
   const [error, setError] = useState("")
   const [editing, setEditing] = useState<Member | null | undefined>(undefined)
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
+  const [statusTarget, setStatusTarget] = useState<Member | null>(null)
+  const [statusSaving, setStatusSaving] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Member | null>(null)
+  const [message, setMessage] = useState("")
+  const [clockMs, setClockMs] = useState(() => Date.now())
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError("")
     const supabase = createClient()
 
-    const [
-      membersResult,
-      groupsResult,
-      sharesResult,
-      periodsResult,
-      receiptsResult,
-      paymentsResult,
-    ] = await Promise.all([
-      supabase
-        .from("members")
-        .select(
-          "id, full_name, phone, zalo_phone, address, bank_name, bank_account_number, bank_account_name, notes, is_active, created_at, updated_at",
-        )
-        .order("full_name"),
-      supabase
-        .from("hui_groups")
-        .select("id, code, name, contribution_amount, total_shares, status"),
-      supabase
-        .from("hui_shares")
-        .select("id, group_id, member_id, share_number, status"),
-      supabase
-        .from("hui_periods")
-        .select(
-          "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, fee_amount, status",
+    try {
+      const [memberRows, groupRows, shareRows, periodRows] = await Promise.all([
+        fetchAllPages<Member>((from, to) =>
+          supabase
+            .from("members")
+            .select(
+              "id, full_name, phone, zalo_phone, address, bank_name, bank_account_number, bank_account_name, notes, is_active, created_at, updated_at",
+            )
+            .order("id", { ascending: true })
+            .range(from, to),
         ),
-      supabase
-        .from("hui_receipts")
-        .select("id, member_id, receipt_date, settlement_amount, status"),
-      supabase
-        .from("receipt_payments")
-        .select(
-          "id, receipt_id, direction, amount, status, source_period_id",
+        fetchAllPages<GroupRow>((from, to) =>
+          supabase
+            .from("hui_groups")
+            .select(
+              "id, code, name, contribution_amount, total_shares, opening_time, status",
+            )
+            .order("id", { ascending: true })
+            .range(from, to),
         ),
-    ])
+        fetchAllPages<ShareRow>((from, to) =>
+          supabase
+            .from("hui_shares")
+            .select("id, group_id, member_id, share_number, status")
+            .order("id", { ascending: true })
+            .range(from, to),
+        ),
+        fetchAllPages<PeriodRow>((from, to) =>
+          supabase
+            .from("hui_periods")
+            .select(
+              "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status",
+            )
+            .order("id", { ascending: true })
+            .range(from, to),
+        ),
+      ])
+      const receiptRows = await fetchReceiptsForMemberIds(
+        memberRows.map((member) => member.id),
+      )
+      const paymentRows = await fetchActivePaymentsForReceiptIds(
+        receiptRows.map((receipt) => receipt.id),
+      )
 
-    const firstError =
-      membersResult.error ??
-      groupsResult.error ??
-      sharesResult.error ??
-      periodsResult.error ??
-      receiptsResult.error ??
-      paymentsResult.error
-
-    if (firstError) {
-      console.error(firstError)
+      setMembers(
+        memberRows.sort((a, b) => a.full_name.localeCompare(b.full_name, "vi")),
+      )
+      setGroups(groupRows)
+      setShares(shareRows)
+      setPeriods(periodRows)
+      setReceipts(receiptRows)
+      setPayments(paymentRows)
+    } catch (caught) {
+      console.error(caught)
       setError("Không thể tải đầy đủ dữ liệu hụi viên.")
-    } else {
-      setMembers((membersResult.data ?? []) as Member[])
-      setGroups((groupsResult.data ?? []) as GroupRow[])
-      setShares((sharesResult.data ?? []) as ShareRow[])
-      setPeriods((periodsResult.data ?? []) as PeriodRow[])
-      setReceipts((receiptsResult.data ?? []) as ReceiptRow[])
-      setPayments((paymentsResult.data ?? []) as PaymentRow[])
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }, [])
 
   useEffect(() => {
     void loadData()
   }, [loadData])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockMs(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const profiles = useMemo(() => {
     const groupById = new Map(groups.map((group) => [group.id, group]))
@@ -331,37 +512,9 @@ export function HuiVienPage() {
       periodsByGroup.set(period.group_id, list)
     }
 
-    const receiptById = new Map(
-      receipts
-        .filter((receipt) => receipt.status !== "cancelled")
-        .map((receipt) => [receipt.id, receipt]),
-    )
-
-    const paymentByMember = new Map<
+    const derivedObligationByMemberDate = new Map<
       string,
-      { collected: number; paid: number }
-    >()
-
-    for (const payment of payments) {
-      if (payment.status !== "active") continue
-      const receipt = receiptById.get(payment.receipt_id)
-      if (!receipt) continue
-
-      const current = paymentByMember.get(receipt.member_id) ?? {
-        collected: 0,
-        paid: 0,
-      }
-      if (payment.direction === "collect") {
-        current.collected += Number(payment.amount || 0)
-      } else {
-        current.paid += Number(payment.amount || 0)
-      }
-      paymentByMember.set(receipt.member_id, current)
-    }
-
-    const obligationByMember = new Map<
-      string,
-      { shouldCollect: number; shouldPay: number }
+      DerivedMemberObligation
     >()
 
     for (const period of periods.filter((period) => isCompleted(period.status))) {
@@ -379,31 +532,63 @@ export function HuiVienPage() {
         groupShares,
         groupPeriods,
       )
+      const timing = resolvePeriodTiming({
+        openedAt: period.opened_at,
+        scheduledAt: period.scheduled_at,
+        scheduledDate: period.scheduled_date,
+        openingTime: group.opening_time,
+      })
 
       for (const [memberId, net] of nets.entries()) {
-        const current = obligationByMember.get(memberId) ?? {
-          shouldCollect: 0,
-          shouldPay: 0,
+        if (!net) continue
+        const receiptKey = `${memberId}|${period.scheduled_date}`
+        const current = derivedObligationByMemberDate.get(receiptKey) ?? {
+          receiptKey,
+          memberId,
+          receiptDate: period.scheduled_date,
+          expectedNet: 0,
+          openedAtMs: timing.openedAtMs,
+          deadlineAtMs: timing.deadlineAtMs,
+          timingSource: timing.source,
+          periods: [],
         }
-        if (net > 0) current.shouldCollect += net
-        if (net < 0) current.shouldPay += Math.abs(net)
-        obligationByMember.set(memberId, current)
+        current.expectedNet += net
+        const periodDetail: DerivedObligationPeriod = {
+          periodId: period.id,
+          groupId: group.id,
+          groupName: group.name,
+          periodNumber: period.period_number,
+          scheduledDate: period.scheduled_date,
+          expectedNet: net,
+          openedAtMs: timing.openedAtMs,
+          deadlineAtMs: timing.deadlineAtMs,
+          timingSource: timing.source,
+        }
+        current.periods.push(periodDetail)
+        if (timing.deadlineAtMs >= current.deadlineAtMs) {
+          current.openedAtMs = timing.openedAtMs
+          current.deadlineAtMs = timing.deadlineAtMs
+          current.timingSource = timing.source
+        }
+        derivedObligationByMemberDate.set(receiptKey, current)
       }
     }
 
-    for (const receipt of receipts) {
-      if (receipt.status === "cancelled") continue
-      const settlement = Number(receipt.settlement_amount || 0)
-      if (!settlement) continue
-
-      const current = obligationByMember.get(receipt.member_id) ?? {
-        shouldCollect: 0,
-        shouldPay: 0,
-      }
-      if (settlement > 0) current.shouldCollect += settlement
-      if (settlement < 0) current.shouldPay += Math.abs(settlement)
-      obligationByMember.set(receipt.member_id, current)
+    const derivedObligations = [...derivedObligationByMemberDate.values()]
+    for (const obligation of derivedObligations) {
+      obligation.periods.sort(
+        (a, b) =>
+          a.openedAtMs - b.openedAtMs ||
+          a.groupName.localeCompare(b.groupName, "vi") ||
+          a.periodNumber - b.periodNumber,
+      )
     }
+    const moneyByMember = calculateMemberMoneyByReceipt(
+      receipts,
+      payments,
+      derivedObligations,
+      clockMs,
+    )
 
     return members.map((member): MemberProfile => {
       const memberShares = shares.filter(
@@ -465,58 +650,23 @@ export function HuiVienPage() {
         })
       }
 
-      const obligation = obligationByMember.get(member.id) ?? {
+      const money = moneyByMember.get(member.id) ?? {
         shouldCollect: 0,
         shouldPay: 0,
-      }
-      const actual = paymentByMember.get(member.id) ?? {
         collected: 0,
         paid: 0,
+        overdue: 0,
+        cashFlowDifference: 0,
+        cashFlowLevel: "normal" as const,
+        collectObligations: [],
       }
-
-      const overdue = Math.max(
-        0,
-        obligation.shouldCollect - actual.collected,
-      )
-
-      const riskReasons: string[] = []
-      let risk: RiskLevel = "normal"
-
-      if (deadShares > 0 && futureObligation > 0) {
-        riskReasons.push(
-          `Đã hốt ${deadShares} chân, còn nghĩa vụ tương lai ${formatVND(
-            futureObligation,
-          )}.`,
-        )
-        risk = "watch"
-      }
-
-      if (overdue > 0) {
-        riskReasons.push(`Đang thiếu ${formatVND(overdue)} đã đến hạn.`)
-        risk = deadShares > 0 ? "high" : "watch"
-      }
-
-      if (
-        overdue > 0 &&
-        futureObligation > 0 &&
-        (deadShares >= 2 ||
-          overdue >= 10_000_000 ||
-          futureObligation >= 30_000_000)
-      ) {
-        risk = "very_high"
-      } else if (
-        risk !== "very_high" &&
-        deadShares >= 2 &&
-        futureObligation >= 20_000_000
-      ) {
-        risk = "high"
-      }
-
-      if (riskReasons.length === 0) {
-        riskReasons.push(
-          "Chưa phát hiện khoản thiếu đến hạn hoặc nghĩa vụ sau khi hốt đáng chú ý.",
-        )
-      }
+      const overdue = money.overdue
+      const cashFlowReason =
+        money.cashFlowDifference > 0
+          ? `Đã đóng nhiều hơn đã nhận ${formatVND(money.cashFlowDifference)}.`
+          : money.cashFlowDifference < 0
+            ? `Đã nhận nhiều hơn đã đóng ${formatVND(Math.abs(money.cashFlowDifference))}.`
+            : "Tổng đã đóng và đã nhận đang cân bằng."
 
       return {
         member,
@@ -528,18 +678,20 @@ export function HuiVienPage() {
         liveShares,
         deadShares,
         futureObligation,
-        shouldCollect: obligation.shouldCollect,
-        shouldPay: obligation.shouldPay,
-        collected: actual.collected,
-        paid: actual.paid,
+        shouldCollect: money.shouldCollect,
+        shouldPay: money.shouldPay,
+        collected: money.collected,
+        paid: money.paid,
         overdue,
-        totalReceived: actual.paid,
-        totalContributed: actual.collected,
-        risk,
-        riskReasons,
+        totalReceived: money.paid,
+        totalContributed: money.collected,
+        cashFlowDifference: money.cashFlowDifference,
+        cashFlowLevel: money.cashFlowLevel,
+        cashFlowReason,
+        collectObligations: money.collectObligations,
       }
     })
-  }, [groups, members, payments, periods, receipts, shares])
+  }, [clockMs, groups, members, payments, periods, receipts, shares])
 
   const filteredProfiles = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("vi")
@@ -558,27 +710,48 @@ export function HuiVienPage() {
     (profile) => profile.member.id === selectedMemberId,
   )
 
-  async function toggleActive(member: Member) {
+  async function confirmStatusChange() {
+    if (!statusTarget || statusSaving) return
+
     setError("")
-    const nextActive = !member.is_active
-    const { error: updateError } = await createClient()
-      .from("members")
-      .update({
-        is_active: nextActive,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", member.id)
+    setStatusSaving(true)
+    const nextActive = !statusTarget.is_active
+    try {
+      const { data: updatedMember, error: updateError } = await createClient()
+        .from("members")
+        .update({
+          is_active: nextActive,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", statusTarget.id)
+        .eq("is_active", statusTarget.is_active)
+        .select(
+          "id, full_name, phone, zalo_phone, address, bank_name, bank_account_number, bank_account_name, notes, is_active, created_at, updated_at",
+        )
+        .maybeSingle()
 
-    if (updateError) {
-      setError("Không thể cập nhật trạng thái hụi viên.")
-      return
+      if (updateError || !updatedMember) {
+        setError(
+          updateError
+            ? "Không thể xác minh kết quả cập nhật; trạng thái hiển thị được giữ nguyên."
+            : "Trạng thái hụi viên đã thay đổi ở phiên khác. Hãy tải lại trước khi thử lại.",
+        )
+        return
+      }
+
+      setMembers((current) =>
+        current.map((item) =>
+          item.id === statusTarget.id ? (updatedMember as Member) : item,
+        ),
+      )
+      setStatusTarget(null)
+    } catch {
+      setError(
+        "Không thể xác minh kết quả cập nhật; trạng thái hiển thị được giữ nguyên.",
+      )
+    } finally {
+      setStatusSaving(false)
     }
-
-    setMembers((current) =>
-      current.map((item) =>
-        item.id === member.id ? { ...item, is_active: nextActive } : item,
-      ),
-    )
   }
 
   if (selectedProfile) {
@@ -592,81 +765,100 @@ export function HuiVienPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">Hụi viên</h1>
-          <p className="text-sm text-muted-foreground">
-            {members.length} người · theo dõi chân hụi và mức rủi ro
-          </p>
-        </div>
-        <Button onClick={() => setEditing(null)}>
-          <Plus className="size-4" />
-          Thêm hụi viên
-        </Button>
-      </div>
+    <HuiPage wide className="flex flex-col pb-6 md:pb-8">
+      <HuiPageHeader
+        title="Hụi viên"
+        subtitle={`${members.length} người · Theo dõi chân hụi, công nợ và dòng tiền`}
+        actions={
+          <Button className="h-10 px-4 font-semibold" onClick={() => setEditing(null)}>
+            <Plus className="size-4" />
+            <span className="hidden sm:inline">Thêm hụi viên</span>
+            <span className="sm:hidden">Thêm</span>
+          </Button>
+        }
+      />
 
-      <div className="relative">
+      <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           aria-label="Tìm hụi viên"
           placeholder="Tìm theo tên hoặc SĐT..."
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          className="h-9 pl-9"
+          className="h-11 pl-9"
         />
       </div>
 
       {error && (
         <Card
-          className="flex items-center justify-between gap-3 border-destructive/30 p-4 text-sm text-destructive"
+          className="flex flex-row items-center justify-between gap-3 rounded-lg border-destructive/30 p-4 text-sm text-destructive"
           role="alert"
         >
           <span>{error}</span>
-          <Button variant="outline" size="sm" onClick={() => void loadData()}>
+          <Button className="h-9" variant="outline" size="sm" onClick={() => void loadData()}>
             Thử lại
           </Button>
         </Card>
       )}
 
+      {message && (
+        <Card
+          className="rounded-lg border-success/30 bg-success/10 p-4 text-sm font-medium text-success-foreground"
+          role="status"
+        >
+          {message}
+        </Card>
+      )}
+
       {loading ? (
         <div
-          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
+          className="flex items-center justify-center gap-2 py-16 text-sm font-medium text-muted-foreground"
           role="status"
         >
           <LoaderCircle className="size-5 animate-spin" />
           Đang tải hụi viên...
         </div>
       ) : filteredProfiles.length === 0 ? (
-        <Card className="flex flex-col items-center gap-2 p-10 text-center">
-          <UserRound className="size-8 text-muted-foreground" />
-          <p className="font-medium">
-            {query ? "Không tìm thấy hụi viên" : "Chưa có hụi viên"}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {query
+        <HuiEmptyState
+          icon={UserRound}
+          title={query ? "Không tìm thấy hụi viên" : "Chưa có hụi viên"}
+          description={
+            query
               ? "Thử tìm bằng tên hoặc số điện thoại khác."
-              : "Thêm hụi viên đầu tiên để bắt đầu."}
-          </p>
-        </Card>
+              : "Thêm hụi viên đầu tiên để bắt đầu."
+          }
+          action={
+            !query ? (
+              <Button className="h-10" onClick={() => setEditing(null)}>
+                <Plus className="size-4" /> Thêm hụi viên
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <>
-          <Card className="hidden md:block">
-            <div className="w-full overflow-x-auto">
-              <table className="min-w-[980px] w-full text-sm">
-                <thead className="bg-muted/50">
+          <div className="hidden xl:block">
+            <HuiTableFrame>
+              <table className="w-full table-fixed text-sm">
+                <colgroup>
+                  <col className="w-[19%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[15%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[35%]" />
+                </colgroup>
+                <thead>
                   <tr>
                     {[
                       "Họ tên",
                       "Điện thoại / Zalo",
-                      "Ngân hàng",
                       "Đánh giá",
                       "Trạng thái",
                       "Thao tác",
                     ].map((heading) => (
                       <th
                         key={heading}
-                        className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                        className={huiTableHeadClass}
                       >
                         {heading}
                       </th>
@@ -677,17 +869,17 @@ export function HuiVienPage() {
                 <tbody className="divide-y divide-border">
                   {filteredProfiles.map((profile) => {
                     const member = profile.member
-                    const meta = riskMeta(profile.risk)
+                    const meta = cashFlowMeta(profile.cashFlowLevel)
 
                     return (
                       <tr
                         key={member.id}
-                        className="cursor-pointer hover:bg-muted/30"
+                        className="cursor-pointer transition-colors hover:bg-secondary/70 focus-within:bg-secondary/70"
                         onClick={() => setSelectedMemberId(member.id)}
                       >
-                        <td className="whitespace-nowrap px-4 py-3">
+                        <td className={`${huiTableCellClass} min-w-0`}>
                           <button
-                            className="text-left font-medium hover:underline"
+                            className="max-w-full break-words text-left font-bold hover:text-primary hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             onClick={(event) => {
                               event.stopPropagation()
                               setSelectedMemberId(member.id)
@@ -697,61 +889,51 @@ export function HuiVienPage() {
                           </button>
                         </td>
 
-                        <td className="px-4 py-3 text-muted-foreground">
-                          <div className="min-w-[150px]">
-                            <p className="whitespace-nowrap">
+                        <td className={`${huiTableCellClass} min-w-0 text-muted-foreground`}>
+                          <div className="min-w-0 break-words">
+                            <p>
                               ĐT: {member.phone || "—"}
                             </p>
-                            <p className="whitespace-nowrap text-xs">
+                            <p className="text-xs">
                               Zalo: {member.zalo_phone || "—"}
                             </p>
                           </div>
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                          {member.bank_name || "—"}
+                        <td className={huiTableCellClass}>
+                          <HuiStatusBadge
+                            label={meta.label}
+                            icon={meta.Icon}
+                            tone={meta.tone}
+                          />
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
-                          >
-                            <meta.Icon className="size-3.5" />
-                            {meta.label}
-                          </span>
+                        <td className={huiTableCellClass}>
+                          <HuiStatusBadge
+                            label={member.is_active ? "Hoạt động" : "Tạm ngưng"}
+                            tone={member.is_active ? "success" : "warning"}
+                          />
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void toggleActive(member)
-                            }}
-                            className={
-                              member.is_active
-                                ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
-                                : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
-                            }
-                          >
-                            {member.is_active ? "Hoạt động" : "Tạm ngưng"}
-                          </button>
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <div className="flex min-w-[190px] items-center gap-1">
+                        <td className={huiTableCellClass}>
+                          <div className="flex flex-nowrap items-center gap-1.5">
                             <Button
-                              variant="ghost"
+                              variant="outline"
                               size="sm"
                               onClick={(event) => {
                                 event.stopPropagation()
-                                setSelectedMemberId(member.id)
+                                setStatusTarget(member)
                               }}
                             >
-                              <WalletCards className="size-4" />
-                              Tiền bạc
+                              {member.is_active ? (
+                                <UserRoundX className="size-4" />
+                              ) : (
+                                <UserRoundCheck className="size-4" />
+                              )}
+                              {member.is_active ? "Tạm ngưng" : "Mở lại"}
                             </Button>
                             <Button
-                              variant="ghost"
+                              variant="outline"
                               size="sm"
                               onClick={(event) => {
                                 event.stopPropagation()
@@ -761,6 +943,20 @@ export function HuiVienPage() {
                               <Pencil className="size-4" />
                               Sửa
                             </Button>
+                            {currentRole === "super_admin" && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-danger/40 text-danger hover:bg-danger-soft hover:text-danger"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  setDeleteTarget(member)
+                                }}
+                              >
+                                <Trash2 className="size-4" />
+                                Xóa hồ sơ
+                              </Button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -768,71 +964,107 @@ export function HuiVienPage() {
                   })}
                 </tbody>
               </table>
-            </div>
-          </Card>
+            </HuiTableFrame>
+          </div>
 
-          <div className="flex flex-col gap-2 md:hidden">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:hidden">
             {filteredProfiles.map((profile) => {
               const member = profile.member
-              const meta = riskMeta(profile.risk)
+              const meta = cashFlowMeta(profile.cashFlowLevel)
+              const contactLines = getMemberCardContactLines(member)
 
               return (
                 <Card
                   key={member.id}
-                  className="cursor-pointer p-4"
-                  onClick={() => setSelectedMemberId(member.id)}
+                  className="gap-0 overflow-hidden rounded-lg p-0"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold">
-                        {member.full_name}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {member.phone || "Chưa có SĐT"}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Zalo: {member.zalo_phone || "—"} ·{" "}
-                        {member.bank_name || "Chưa có ngân hàng"}
-                      </p>
+                  <button
+                    type="button"
+                    className="flex w-full flex-1 flex-col p-3.5 text-left transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:p-4"
+                    onClick={() => setSelectedMemberId(member.id)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="break-words text-base font-bold">
+                          {member.full_name}
+                        </p>
+                        <div className="mt-0.5 space-y-0.5 text-sm text-muted-foreground">
+                          {contactLines.map((line) => (
+                            <p
+                              key={line}
+                              className="break-words [overflow-wrap:anywhere]"
+                            >
+                              {line}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+
+                      <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
                     </div>
 
-                    <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
-                  </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <HuiStatusBadge
+                        label={meta.label}
+                        icon={meta.Icon}
+                        tone={meta.tone}
+                      />
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${meta.className}`}
-                    >
-                      <meta.Icon className="size-3.5" />
-                      {meta.label}
-                    </span>
+                      <HuiStatusBadge
+                        label={member.is_active ? "Hoạt động" : "Tạm ngưng"}
+                        tone={member.is_active ? "success" : "warning"}
+                      />
+                    </div>
+                  </button>
 
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        void toggleActive(member)
+                  <div
+                    className={`grid gap-1.5 border-t border-border p-3 ${
+                      currentRole === "super_admin"
+                        ? "grid-cols-1 min-[360px]:grid-cols-3"
+                        : "grid-cols-2"
+                    }`}
+                  >
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-10 w-full px-2 text-xs sm:text-sm"
+                      onClick={() => {
+                        setStatusTarget(member)
                       }}
-                      className={
-                        member.is_active
-                          ? "rounded-full bg-status-green-bg px-2 py-1 text-xs font-medium text-status-green-fg"
-                          : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"
-                      }
                     >
-                      {member.is_active ? "Hoạt động" : "Tạm ngưng"}
-                    </button>
+                      {member.is_active ? (
+                        <UserRoundX className="size-4" />
+                      ) : (
+                        <UserRoundCheck className="size-4" />
+                      )}
+                      {member.is_active ? "Tạm ngưng" : "Mở lại"}
+                    </Button>
 
                     <Button
                       variant="outline"
                       size="sm"
-                      className="ml-auto"
-                      onClick={(event) => {
-                        event.stopPropagation()
+                      className="h-10 w-full px-2 text-xs sm:text-sm"
+                      onClick={() => {
                         setEditing(member)
                       }}
                     >
                       <Pencil className="size-4" />
                       Sửa
                     </Button>
+
+                    {currentRole === "super_admin" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 w-full border-danger/40 px-2 text-xs text-danger hover:bg-danger-soft hover:text-danger sm:text-sm"
+                        onClick={() => {
+                          setDeleteTarget(member)
+                        }}
+                      >
+                        <Trash2 className="size-4" />
+                        Xóa hồ sơ
+                      </Button>
+                    )}
                   </div>
                 </Card>
               )
@@ -861,7 +1093,324 @@ export function HuiVienPage() {
           }}
         />
       )}
-    </div>
+
+      <Dialog
+        open={Boolean(statusTarget)}
+        onOpenChange={(open) => {
+          if (!open && !statusSaving) setStatusTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {statusTarget?.is_active
+                ? "Tạm ngưng hồ sơ hụi viên?"
+                : "Mở lại hồ sơ hụi viên?"}
+            </DialogTitle>
+            <DialogDescription>
+              {statusTarget?.is_active
+                ? "Hụi viên sẽ không được thêm vào dây hoặc chân mới. Các dây, chân, phiếu, nghĩa vụ và lịch sử hiện có vẫn giữ nguyên. Tài khoản đăng nhập không tự động bị khóa; muốn ngăn đăng nhập phải khóa tài khoản riêng."
+                : "Hồ sơ sẽ được phép tham gia nghiệp vụ mới trở lại. Dữ liệu lịch sử và trạng thái tài khoản đăng nhập không thay đổi."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-border bg-secondary p-3 text-sm">
+            <p className="font-bold">{statusTarget?.full_name}</p>
+            <p className="text-muted-foreground">
+              {statusTarget?.phone || "Chưa có số điện thoại"}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={statusSaving}
+              onClick={() => setStatusTarget(null)}
+            >
+              Hủy
+            </Button>
+            <Button disabled={statusSaving} onClick={() => void confirmStatusChange()}>
+              {statusSaving && <LoaderCircle className="size-4 animate-spin" />}
+              {statusTarget?.is_active ? "Tạm ngưng" : "Mở lại"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <DeleteMemberDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={(memberId) => {
+          setDeleteTarget(null)
+          setMembers((current) =>
+            current.filter((member) => member.id !== memberId),
+          )
+          setMessage("Đã xóa hồ sơ hụi viên chưa phát sinh nghiệp vụ.")
+          setError("")
+          void loadData()
+        }}
+      />
+    </HuiPage>
+  )
+}
+
+function DeleteMemberDialog({
+  target,
+  onClose,
+  onDeleted,
+}: {
+  target: Member | null
+  onClose: () => void
+  onDeleted: (memberId: string) => void
+}) {
+  const [preflight, setPreflight] = useState<MemberDeletePreflight | null>(null)
+  const [loadingPreflight, setLoadingPreflight] = useState(false)
+  const [reason, setReason] = useState("")
+  const [confirmation, setConfirmation] = useState("")
+  const [error, setError] = useState("")
+  const [deleting, setDeleting] = useState(false)
+  const deleteInFlightRef = useRef(false)
+  const preflightRequestRef = useRef(0)
+
+  const loadPreflight = useCallback(async () => {
+    if (!target) return
+
+    const requestId = ++preflightRequestRef.current
+    setLoadingPreflight(true)
+    setPreflight(null)
+    try {
+      const { data } = await createClient().auth.getSession()
+      const accessToken = data.session?.access_token ?? ""
+      const response = await fetch(
+        `/api/admin/members?member_id=${encodeURIComponent(target.id)}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      )
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error ?? "Không thể kiểm tra hồ sơ hụi viên.")
+      }
+
+      if (preflightRequestRef.current === requestId) {
+        setPreflight(result as MemberDeletePreflight)
+      }
+    } catch (caught) {
+      if (preflightRequestRef.current === requestId) {
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Không thể kiểm tra hồ sơ hụi viên.",
+        )
+      }
+    } finally {
+      if (preflightRequestRef.current === requestId) {
+        setLoadingPreflight(false)
+      }
+    }
+  }, [target])
+
+  useEffect(() => {
+    preflightRequestRef.current += 1
+    setPreflight(null)
+    setReason("")
+    setConfirmation("")
+    setError("")
+    setDeleting(false)
+    if (target) void loadPreflight()
+  }, [loadPreflight, target])
+
+  if (!target) return null
+  const targetMember = target
+
+  let normalizedTargetPhone = ""
+  let confirmationMatchesPhone = false
+  if (target.phone) {
+    try {
+      normalizedTargetPhone = normalizeVietnamPhone(target.phone)
+    } catch {
+      normalizedTargetPhone = ""
+    }
+  }
+  if (normalizedTargetPhone && confirmation.trim()) {
+    try {
+      confirmationMatchesPhone =
+        normalizeVietnamPhone(confirmation) === normalizedTargetPhone
+    } catch {
+      confirmationMatchesPhone = false
+    }
+  }
+
+  const confirmationValid =
+    confirmation.trim() === "XOA" || confirmationMatchesPhone
+  const canDelete =
+    preflight?.member_delete_enabled === true &&
+    preflight.member.id === targetMember.id &&
+    reason.trim().length >= 5 &&
+    confirmationValid &&
+    !loadingPreflight &&
+    !deleting
+  const dependencyRows: Array<[string, number]> = preflight
+    ? [
+        ["Chân hụi", preflight.counts.hui_shares],
+        ["Phiếu hiện tại", preflight.counts.hui_receipts],
+        ["Thanh toán", preflight.counts.receipt_payments],
+        ["Phiếu legacy", preflight.counts.receipts],
+        ["Giao dịch legacy", preflight.counts.transactions],
+        ["Tài khoản app", preflight.counts.app_users],
+        ["Profile legacy", preflight.counts.profiles],
+      ]
+    : []
+
+  async function deleteMember() {
+    if (!canDelete || deleteInFlightRef.current) return
+
+    deleteInFlightRef.current = true
+    setDeleting(true)
+    setError("")
+    try {
+      const { data } = await createClient().auth.getSession()
+      const accessToken = data.session?.access_token ?? ""
+      const response = await fetch("/api/admin/members", {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          member_id: targetMember.id,
+          reason: reason.trim(),
+          confirmation: confirmation.trim(),
+        }),
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        setError(result.error ?? "Không thể xóa hồ sơ hụi viên.")
+        if (response.status === 409 || result.reload_preflight) {
+          await loadPreflight()
+        }
+        return
+      }
+
+      if (result.ok !== true) {
+        setError("Máy chủ không xác nhận xóa thành công. Hãy tải lại danh sách.")
+        return
+      }
+
+      onDeleted(targetMember.id)
+    } catch {
+      setError("Không thể xác minh kết quả xóa. Hãy tải lại danh sách trước khi thử lại.")
+    } finally {
+      deleteInFlightRef.current = false
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={Boolean(target)}
+      onOpenChange={(open) => {
+        if (!open && !deleting) onClose()
+      }}
+    >
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Xóa hồ sơ hụi viên</DialogTitle>
+          <DialogDescription>
+            Đây là xóa vĩnh viễn hồ sơ nghiệp vụ hoàn toàn sạch, khác với xóa
+            tài khoản đăng nhập. RPC sẽ kiểm tra lại toàn bộ dependency ngay
+            trong transaction trước khi xóa.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="rounded-md border border-border bg-secondary p-3 text-sm">
+          <p className="font-bold">{preflight?.member.full_name ?? targetMember.full_name}</p>
+          <p className="text-muted-foreground">
+            {preflight?.member.phone || targetMember.phone || "Chưa có số điện thoại"}
+          </p>
+        </div>
+
+        {loadingPreflight ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <LoaderCircle className="size-4 animate-spin" />
+            Đang đếm chính xác các dependency...
+          </p>
+        ) : preflight ? (
+          <>
+            <div className="overflow-hidden rounded-md border border-border">
+              <table className="w-full text-sm">
+                <tbody className="divide-y divide-border">
+                  {dependencyRows.map(([label, count]) => (
+                    <tr key={label}>
+                      <td className="px-3 py-2 text-muted-foreground">{label}</td>
+                      <td className="px-3 py-2 text-right font-bold tabular-nums">
+                        {count}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {preflight.member_delete_blocker ? (
+              <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
+                <p className="font-semibold">{preflight.member_delete_blocker}</p>
+                <p className="mt-1 text-muted-foreground">
+                  {preflight.has_business_history
+                    ? "Có lịch sử nghiệp vụ: hãy dùng “Tạm ngưng hồ sơ”."
+                    : ""}
+                  {preflight.has_login_link
+                    ? " Có tài khoản liên kết: hãy dùng “Khóa đăng nhập” ở phần quản lý tài khoản."
+                    : ""}
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                <label className="grid gap-1.5 text-sm font-medium">
+                  Lý do xóa (ít nhất 5 ký tự)
+                  <Input
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    disabled={deleting}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-sm font-medium">
+                  Gõ XOA hoặc đúng số điện thoại để xác nhận
+                  <Input
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                    autoComplete="off"
+                    disabled={deleting}
+                  />
+                </label>
+              </div>
+            )}
+          </>
+        ) : null}
+
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" disabled={deleting} onClick={onClose}>
+            Hủy
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!canDelete}
+            onClick={() => void deleteMember()}
+          >
+            {deleting ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
+            Xóa vĩnh viễn hồ sơ
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -874,66 +1423,62 @@ function MemberProfilePage({
   onBack: () => void
   onEdit: () => void
 }) {
-  const meta = riskMeta(profile.risk)
+  const meta = cashFlowMeta(profile.cashFlowLevel)
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
+    <HuiPage wide>
+      <HuiPageHeader
+        leading={
           <Button
             variant="ghost"
             size="icon"
             onClick={onBack}
-            className="shrink-0"
+            className="size-10 shrink-0"
+            aria-label="Về danh sách hụi viên"
           >
             <ArrowLeft className="size-4" />
           </Button>
-          <div className="min-w-0">
-            <h1 className="truncate text-xl font-bold">
-              {profile.member.full_name}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {profile.member.phone || "Chưa có SĐT"}
-            </p>
-          </div>
-        </div>
+        }
+        title={profile.member.full_name}
+        subtitle={`${profile.member.phone || "Chưa có SĐT"} · ${profile.groupCount} dây · ${profile.totalShares} chân`}
+        actions={
+          <Button className="h-10 font-semibold" variant="outline" onClick={onEdit}>
+            <Pencil className="size-4" /> Sửa
+          </Button>
+        }
+      />
 
-        <Button variant="outline" size="sm" onClick={onEdit}>
-          <Pencil className="size-4" />
-          Sửa
-        </Button>
-      </div>
-
-      <Card className="p-4">
+      <Card className="gap-0 rounded-lg p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-sm text-muted-foreground">Đánh giá hiện tại</p>
-            <span
-              className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold ${meta.className}`}
-            >
-              <meta.Icon className="size-4" />
-              {meta.label}
-            </span>
+            <p className="text-sm text-muted-foreground">Đánh giá dòng tiền</p>
+            <div className="mt-1">
+              <HuiStatusBadge
+                className="min-h-8 px-3 text-sm"
+                label={meta.label}
+                icon={meta.Icon}
+                tone={meta.tone}
+              />
+            </div>
           </div>
 
           <div className="text-sm sm:max-w-xl">
-            {profile.riskReasons.map((reason) => (
-              <p key={reason} className="mb-1 last:mb-0">
-                • {reason}
-              </p>
-            ))}
+            <p>{profile.cashFlowReason}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Chênh lệch: {formatSignedVND(profile.cashFlowDifference)}
+            </p>
           </div>
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <BigStat label="Số dây" value={String(profile.groupCount)} />
-        <BigStat label="Tổng chân" value={String(profile.totalShares)} />
-        <BigStat label="Chân sống" value={String(profile.liveShares)} />
-        <BigStat label="Chân chết / đã hốt" value={String(profile.deadShares)} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <HuiStatCard label="Số dây" value={profile.groupCount} tone="info" />
+        <HuiStatCard label="Tổng chân" value={profile.totalShares} />
+        <HuiStatCard label="Chân sống" value={profile.liveShares} tone="success" />
+        <HuiStatCard label="Chân chết / đã hốt" value={profile.deadShares} tone="warning" />
       </div>
 
-      <Card className="p-4">
+      <Card className="gap-0 rounded-lg p-4">
         <div className="flex items-center gap-2">
           <WalletCards className="size-5" />
           <h2 className="font-bold">Tiền đã ghi nhận trên hệ thống</h2>
@@ -943,7 +1488,7 @@ function MemberProfilePage({
           <SmallStat label="Đã đóng" value={formatVND(profile.collected)} />
           <SmallStat label="Đã nhận" value={formatVND(profile.paid)} />
           <SmallStat
-            label="Đang thiếu đến hạn"
+            label="Đang thiếu quá hạn"
             value={formatVND(profile.overdue)}
           />
           <SmallStat
@@ -959,21 +1504,88 @@ function MemberProfilePage({
         </p>
       </Card>
 
-      <div>
-        <h2 className="font-bold">Các dây đang tham gia</h2>
+      {profile.collectObligations.length > 0 && (
+        <Card className="gap-0 rounded-lg p-4">
+          <div className="flex items-center gap-2">
+            <WalletCards className="size-5" />
+            <h2 className="font-bold">Các khoản đang chờ thanh toán</h2>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {profile.collectObligations.map((obligation) => {
+              const overdue = obligation.status === "overdue"
+              const periodLabel = obligation.periods.length
+                ? obligation.periods
+                    .map(
+                      (period) =>
+                        `${period.groupName} · K${period.periodNumber}`,
+                    )
+                    .join("; ")
+                : `Nghĩa vụ ngày ${formatDate(obligation.receiptDate)}`
+
+              return (
+                <div
+                  key={obligation.receiptKey}
+                  className="rounded-lg border border-border p-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-semibold">{periodLabel}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Khui lúc {formatVietnamDateTime(obligation.openedAtMs)}
+                      </p>
+                    </div>
+                    <HuiStatusBadge
+                      label={
+                        overdue ? "Quá hạn thanh toán" : "Chờ thanh toán"
+                      }
+                      tone={overdue ? "danger" : "warning"}
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <SmallStat
+                      label="Số phải thu"
+                      value={formatVND(obligation.requiredAmount)}
+                    />
+                    <SmallStat
+                      label="Đã thu"
+                      value={formatVND(obligation.collectedAmount)}
+                    />
+                    <SmallStat
+                      label="Còn thiếu"
+                      value={formatVND(obligation.remainingAmount)}
+                    />
+                  </div>
+
+                  <p className="mt-3 text-xs font-medium text-muted-foreground">
+                    {overdue ? "Quá hạn từ" : "Hạn thanh toán"}: {" "}
+                    {formatVietnamDateTime(obligation.deadlineAtMs)}
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
+
+      <div className="border-b border-border pb-3">
+        <h2 className="text-base font-bold">Các dây đang tham gia</h2>
         <p className="text-sm text-muted-foreground">
           Chi tiết chân sống/chết và nghĩa vụ còn lại theo từng dây.
         </p>
       </div>
 
       {profile.groupStats.length === 0 ? (
-        <Card className="p-8 text-center text-sm text-muted-foreground">
-          Hụi viên này chưa có chân hoạt động trong dây nào.
-        </Card>
+        <HuiEmptyState
+          icon={UserRound}
+          title="Chưa tham gia dây hụi nào"
+          description="Hụi viên này chưa có chân hoạt động trong dây nào."
+        />
       ) : (
         <div className="space-y-3">
           {profile.groupStats.map((stat) => (
-            <Card key={stat.group.id} className="p-4">
+            <Card key={stat.group.id} className="gap-0 rounded-lg p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-semibold">{stat.group.name}</p>
@@ -1008,31 +1620,111 @@ function MemberProfilePage({
         </div>
       )}
 
-      <Card className="p-4 text-xs leading-relaxed text-muted-foreground">
-        Cảnh báo là công cụ hỗ trợ quản trị, không phải kết luận về khả năng trả
-        tiền của một người. Hệ thống tăng mức cảnh báo khi người chơi đã hốt
-        nhiều chân, còn nghĩa vụ tương lai lớn và/hoặc đang thiếu khoản đã đến
-        hạn.
+      <Card className="gap-0 rounded-lg p-4">
+        <div>
+          <h2 className="text-base font-bold">Thông tin cá nhân</h2>
+          <p className="text-sm text-muted-foreground">
+            Thông tin liên hệ và thanh toán của hụi viên.
+          </p>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <section className="grid min-w-0 gap-3">
+            <h3 className="border-b border-border pb-2 text-sm font-bold">
+              Liên hệ
+            </h3>
+            <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2">
+              <ProfileField label="Họ tên" value={profile.member.full_name} />
+              <ProfileField label="Điện thoại" value={profile.member.phone} />
+              <ProfileField label="Zalo" value={profile.member.zalo_phone} />
+              <ProfileField label="Địa chỉ" value={profile.member.address} />
+            </div>
+          </section>
+
+          <section className="grid min-w-0 gap-3">
+            <h3 className="border-b border-border pb-2 text-sm font-bold">
+              Ngân hàng
+            </h3>
+            <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2">
+              <ProfileField label="Ngân hàng" value={profile.member.bank_name} />
+              <ProfileField
+                label="Số tài khoản"
+                value={profile.member.bank_account_number}
+                monospaced
+              />
+              <ProfileField
+                label="Chủ tài khoản"
+                value={profile.member.bank_account_name}
+                className="sm:col-span-2 md:col-span-1 xl:col-span-2"
+              />
+            </div>
+          </section>
+
+          <section className="grid min-w-0 gap-3 md:col-span-2">
+            <h3 className="border-b border-border pb-2 text-sm font-bold">
+              Khác
+            </h3>
+            <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2">
+              <ProfileField
+                label="Trạng thái"
+                value={profile.member.is_active ? "Hoạt động" : "Tạm ngưng"}
+              />
+              <ProfileField
+                label="Ngày tạo hồ sơ"
+                value={formatProfileDate(profile.member.created_at)}
+              />
+              <ProfileField
+                label="Ghi chú"
+                value={profile.member.notes}
+                className="md:col-span-2"
+              />
+            </div>
+          </section>
+        </div>
       </Card>
+
+      <Card className="gap-0 rounded-lg border-dashed p-4 text-xs leading-relaxed text-muted-foreground">
+        Đánh giá dòng tiền chỉ so sánh tổng tiền đã đóng với tổng tiền đã nhận.
+        Khoản quá hạn, số chân đã hốt và nghĩa vụ tương lai được hiển thị riêng
+        để tham khảo, không làm thay đổi badge đánh giá.
+      </Card>
+    </HuiPage>
+  )
+}
+
+function ProfileField({
+  label,
+  value,
+  className = "",
+  monospaced = false,
+}: {
+  label: string
+  value: string | null
+  className?: string
+  monospaced?: boolean
+}) {
+  const displayValue = value?.trim() || "Chưa cập nhật"
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+      <p
+        className={`mt-1 break-words text-sm font-medium [overflow-wrap:anywhere] ${
+          monospaced ? "font-mono tabular-nums" : ""
+        }`}
+      >
+        {displayValue}
+      </p>
     </div>
   )
 }
 
 function SmallStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md bg-muted/50 p-2.5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold">{value}</p>
+    <div className="min-w-0 rounded-md bg-secondary p-2.5">
+      <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+      <p className="mt-1 overflow-x-auto whitespace-nowrap text-sm font-bold tabular-nums">{value}</p>
     </div>
-  )
-}
-
-function BigStat({ label, value }: { label: string; value: string }) {
-  return (
-    <Card className="p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-bold">{value}</p>
-    </Card>
   )
 }
 
@@ -1119,18 +1811,19 @@ function MemberDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 p-4"
+      className="hui-design-surface fixed inset-0 z-50 flex items-end justify-center bg-foreground/30 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <Card className="max-h-[90vh] w-full max-w-2xl overflow-y-auto p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">
-            {member ? "Sửa hụi viên" : "Thêm hụi viên"}
-          </h2>
+      <Card className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-b-none rounded-t-xl p-4 shadow-2xl sm:rounded-xl sm:p-5">
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
+          <div>
+            <h2 className="text-lg font-bold">{member ? "Sửa hụi viên" : "Thêm hụi viên"}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Thông tin liên hệ và tài khoản nhận tiền.</p>
+          </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="size-4" />
           </Button>
@@ -1159,29 +1852,17 @@ function MemberDialog({
             ))}
           </div>
 
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={form.is_active}
-              onChange={(event) =>
-                setField("is_active", event.target.checked)
-              }
-              className="size-4 accent-primary"
-            />
-            Đang hoạt động
-          </label>
-
           {error && (
             <p className="text-sm text-destructive" role="alert">
               {error}
             </p>
           )}
 
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+          <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:justify-end">
+            <Button className="h-10" type="button" variant="outline" onClick={onClose}>
               Hủy
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button className="h-10" type="submit" disabled={saving}>
               {saving && <LoaderCircle className="size-4 animate-spin" />}
               Lưu
             </Button>

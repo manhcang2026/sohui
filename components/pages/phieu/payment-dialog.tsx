@@ -201,7 +201,7 @@ export function PaymentDialog({
           </label>
 
           {editing && allowLegacy && (
-            <p className="rounded-lg bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
+            <p className="rounded-lg bg-warning-soft p-3 text-xs leading-relaxed text-warning-foreground">
               Đây là giao dịch dữ liệu cũ. Bạn có thể sửa số tiền, ngày và đổi sang Chuyển khoản/Tiền mặt sau khi đối chiếu sổ. Nếu thực tế chưa thanh toán, hãy dùng nút Hủy ở lịch sử giao dịch.
             </p>
           )}

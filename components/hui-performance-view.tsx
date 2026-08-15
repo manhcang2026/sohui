@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
   calculateGroupPerformance,
+  getValidPerformancePeriods,
   type PerformancePeriod,
   type PerformanceShare,
 } from "@/lib/hui-performance"
@@ -45,6 +46,10 @@ export function HuiPerformanceView({
     () => calculateGroupPerformance(shares, periods),
     [shares, periods],
   )
+  const validPeriods = useMemo(
+    () => getValidPerformancePeriods(periods),
+    [periods],
+  )
   const membersById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
     [members],
@@ -71,35 +76,51 @@ export function HuiPerformanceView({
 
   const selected =
     rows.find((item) => item.memberId === selectedMemberId) ?? rows[0] ?? null
+  const averageBidAmount = validPeriods.length
+    ? validPeriods.reduce(
+        (sum, period) => sum + Number(period.bid_amount || 0),
+        0,
+      ) / validPeriods.length
+    : null
+  const favorableCount = rows.filter(
+    (row) => row.performanceAmount > 0,
+  ).length
+  const unfavorableCount = rows.filter(
+    (row) => row.performanceAmount < 0,
+  ).length
+  const balancedCount = rows.length - favorableCount - unfavorableCount
 
   return (
     <div className="space-y-3">
       <div className="grid gap-3 md:grid-cols-3">
         <Card className="p-4">
-          <p className="text-xs text-muted-foreground">Tổng lãi thăm đã hưởng</p>
-          <p className="mt-1 text-xl font-bold text-primary">
-            {formatVND(performance.totalBenefitAmount)}
-          </p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-muted-foreground">
-            Tổng chi phí thăm khi hốt
-          </p>
+          <p className="text-xs text-muted-foreground">Kỳ đã khui</p>
           <p className="mt-1 text-xl font-bold">
-            {formatVND(performance.totalCostAmount)}
+            {validPeriods.length}/{periods.length} kỳ
           </p>
         </Card>
         <Card className="p-4">
-          <p className="text-xs text-muted-foreground">
-            Hiệu quả thăm hiện tại
+          <p className="text-xs text-muted-foreground">Giá thăm bình quân</p>
+          {averageBidAmount === null ? (
+            <p className="mt-1 text-sm font-semibold text-muted-foreground">
+              Chưa có kỳ đã khui
+            </p>
+          ) : (
+            <p className="mt-1 text-xl font-bold">
+              {formatVND(averageBidAmount)}
+            </p>
+          )}
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-muted-foreground">Phân bố hiệu quả</p>
+          <p className="mt-1 text-base font-bold leading-snug">
+            {favorableCount} có lợi · {unfavorableCount} bất lợi
           </p>
-          <p
-            className={`mt-1 text-xl font-bold ${amountClass(
-              performance.performanceAmount,
-            )}`}
-          >
-            {formatVND(performance.performanceAmount)}
-          </p>
+          {balancedCount > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {balancedCount} cân bằng
+            </p>
+          )}
         </Card>
       </div>
 
