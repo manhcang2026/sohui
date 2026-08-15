@@ -46,13 +46,19 @@ function isFinished(status: string) {
   return status === "completed" || status === "opened"
 }
 
+export function getValidPerformancePeriods<T extends PerformancePeriod>(
+  periods: T[],
+) {
+  return [...periods]
+    .filter((period) => isFinished(period.status) && period.winner_share_id)
+    .sort((a, b) => a.period_number - b.period_number)
+}
+
 export function calculateGroupPerformance(
   shares: PerformanceShare[],
   periods: PerformancePeriod[],
 ): GroupPerformance {
-  const finishedPeriods = [...periods]
-    .filter((period) => isFinished(period.status) && period.winner_share_id)
-    .sort((a, b) => a.period_number - b.period_number)
+  const finishedPeriods = getValidPerformancePeriods(periods)
 
   const wonShareIds = new Set(
     finishedPeriods

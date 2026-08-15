@@ -21,6 +21,7 @@ import {
   initialBidAmount,
   validateBidAmount,
 } from "@/components/bid-amount-control"
+import { PeriodFeeSummary } from "@/components/period-fee-summary"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -619,14 +620,7 @@ export function PeriodResultDialog({
               disabled={locked}
               onInteraction={() => setError("")}
             />
-            <Card className="flex items-center justify-between gap-4 p-3">
-              <p className="text-sm font-medium">
-                Tiền thảo
-              </p>
-              <p className="shrink-0 font-semibold">
-                {formatVND(day.fee_amount)}
-              </p>
-            </Card>
+            <PeriodFeeSummary value={formatVND(day.fee_amount)} />
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Ngày giờ đã khui

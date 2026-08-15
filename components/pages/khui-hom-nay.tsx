@@ -31,6 +31,7 @@ import {
   initialBidAmount,
   validateBidAmount,
 } from "@/components/bid-amount-control"
+import { PeriodFeeSummary } from "@/components/period-fee-summary"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -1166,7 +1167,7 @@ function KhuiDialog({
             className="mt-5 space-y-5"
             onSubmit={submit}
           >
-            <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 sm:grid-cols-3">
+            <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 sm:grid-cols-2">
               <ConfigValue
                 label="Mệnh giá"
                 value={formatVND(
@@ -1182,13 +1183,6 @@ function KhuiDialog({
                 locked
               />
 
-              <ConfigValue
-                label="Tiền thảo"
-                value={formatVND(
-                  fee,
-                )}
-                locked
-              />
             </div>
 
             <div>
@@ -1288,6 +1282,7 @@ function KhuiDialog({
               disabled={locked}
               onInteraction={handleBidInteraction}
             />
+            <PeriodFeeSummary value={formatVND(fee)} />
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Ngày giờ khui
 

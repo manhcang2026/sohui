@@ -73,88 +73,6 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const memberId = request.nextUrl.searchParams.get("member_id")
-
-    if (memberId) {
-      const { data: member, error: memberError } = await auth.supabase
-        .from("members")
-        .select("id, full_name, phone")
-        .eq("id", memberId)
-        .maybeSingle()
-
-      if (memberError) throw memberError
-      if (!member) {
-        return NextResponse.json(
-          { error: "Không tìm thấy hồ sơ hụi viên." },
-          { status: 404 },
-        )
-      }
-
-      const [
-        shares,
-        receipts,
-        payments,
-        legacyReceipts,
-        legacyTransactions,
-        appUsers,
-        profiles,
-      ] = await Promise.all([
-        auth.supabase.from("hui_shares").select("id", { count: "exact", head: true }).eq("member_id", memberId),
-        auth.supabase.from("hui_receipts").select("id", { count: "exact", head: true }).eq("member_id", memberId),
-        auth.supabase
-          .from("receipt_payments")
-          .select("id, hui_receipts!inner(member_id)", { count: "exact", head: true })
-          .eq("hui_receipts.member_id", memberId),
-        auth.supabase.from("receipts").select("id", { count: "exact", head: true }).eq("member_id", memberId),
-        auth.supabase.from("transactions").select("id", { count: "exact", head: true }).eq("member_id", memberId),
-        auth.supabase.from("app_users").select("auth_user_id", { count: "exact", head: true }).eq("member_id", memberId),
-        auth.supabase.from("profiles").select("id", { count: "exact", head: true }).eq("member_id", memberId),
-      ])
-
-      const firstError = [
-        shares.error,
-        receipts.error,
-        payments.error,
-        legacyReceipts.error,
-        legacyTransactions.error,
-        appUsers.error,
-        profiles.error,
-      ].find(Boolean)
-
-      if (firstError) throw firstError
-
-      const counts = {
-        hui_shares: shares.count ?? 0,
-        hui_receipts: receipts.count ?? 0,
-        receipt_payments: payments.count ?? 0,
-        receipts: legacyReceipts.count ?? 0,
-        transactions: legacyTransactions.count ?? 0,
-        app_users: appUsers.count ?? 0,
-        profiles: profiles.count ?? 0,
-      }
-
-      const businessCount =
-        counts.hui_shares +
-        counts.hui_receipts +
-        counts.receipt_payments +
-        counts.receipts +
-        counts.transactions
-
-      return NextResponse.json({
-        member,
-        counts,
-        has_business_history: businessCount > 0,
-        has_login_link: counts.app_users > 0 || counts.profiles > 0,
-        member_delete_enabled: false,
-        member_delete_blocker:
-          businessCount > 0
-            ? "Hồ sơ đã có lịch sử nghiệp vụ nên không được xóa."
-            : counts.app_users > 0 || counts.profiles > 0
-              ? "Phải xóa tài khoản đăng nhập liên kết trước."
-              : "Cần triển khai RPC atomic đã được duyệt trước khi bật xóa hồ sơ.",
-      })
-    }
-
     const { data, error } = await auth.supabase
       .from("app_users")
       .select(
@@ -172,6 +90,10 @@ export async function GET(request: NextRequest) {
       { status: 500 },
     )
   }
+}
+
+function isInactiveMemberLinkError(error: { message?: string } | null) {
+  return error?.message?.includes("member_inactive_for_new_business") ?? false
 }
 
 export async function DELETE(request: NextRequest) {
@@ -426,6 +348,35 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (memberId) {
+      const { data: linkedMember, error: memberError } = await auth.supabase
+        .from("members")
+        .select("id, is_active")
+        .eq("id", memberId)
+        .maybeSingle()
+
+      if (memberError) {
+        return NextResponse.json(
+          { error: "Không thể xác minh trạng thái hụi viên; chưa tạo tài khoản." },
+          { status: 503 },
+        )
+      }
+
+      if (!linkedMember) {
+        return NextResponse.json(
+          { error: "Không tìm thấy hồ sơ hụi viên để liên kết." },
+          { status: 400 },
+        )
+      }
+
+      if (!linkedMember.is_active) {
+        return NextResponse.json(
+          { error: "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới." },
+          { status: 409 },
+        )
+      }
+    }
+
     const { data: existingPhone } = await auth.supabase
       .from("app_users")
       .select("auth_user_id")
@@ -475,7 +426,11 @@ export async function POST(request: NextRequest) {
       await auth.supabase.auth.admin.deleteUser(created.user.id)
 
       return NextResponse.json(
-        { error: profileError.message },
+        {
+          error: isInactiveMemberLinkError(profileError)
+            ? "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới."
+            : profileError.message,
+        },
         { status: 400 },
       )
     }
@@ -537,6 +492,27 @@ export async function PATCH(request: NextRequest) {
       const displayName = String(body.display_name ?? "").trim()
       const isActive = Boolean(body.is_active)
 
+      const { data: currentTarget, error: currentTargetError } =
+        await auth.supabase
+          .from("app_users")
+          .select("auth_user_id, role, member_id")
+          .eq("auth_user_id", userId)
+          .maybeSingle()
+
+      if (currentTargetError) {
+        return NextResponse.json(
+          { error: "Không thể xác minh trạng thái tài khoản; chưa cập nhật." },
+          { status: 503 },
+        )
+      }
+
+      if (!currentTarget) {
+        return NextResponse.json(
+          { error: "Không tìm thấy tài khoản cần cập nhật." },
+          { status: 404 },
+        )
+      }
+
       if (userId === auth.user.id) {
         if (role !== "super_admin") {
           return NextResponse.json(
@@ -553,6 +529,19 @@ export async function PATCH(request: NextRequest) {
         }
       }
 
+      if (
+        currentTarget.role === "super_admin" &&
+        (role !== "super_admin" || !isActive)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Không thể khóa hoặc hạ quyền super admin bằng thao tác thông thường.",
+          },
+          { status: 400 },
+        )
+      }
+
       if (!["super_admin", "admin", "member"].includes(role)) {
         return NextResponse.json(
           { error: "Vai trò không hợp lệ." },
@@ -567,6 +556,35 @@ export async function PATCH(request: NextRequest) {
         )
       }
 
+      if (memberId && memberId !== currentTarget.member_id) {
+        const { data: linkedMember, error: memberError } = await auth.supabase
+          .from("members")
+          .select("id, is_active")
+          .eq("id", memberId)
+          .maybeSingle()
+
+        if (memberError) {
+          return NextResponse.json(
+            { error: "Không thể xác minh trạng thái hụi viên; chưa cập nhật liên kết." },
+            { status: 503 },
+          )
+        }
+
+        if (!linkedMember) {
+          return NextResponse.json(
+            { error: "Không tìm thấy hồ sơ hụi viên để liên kết." },
+            { status: 400 },
+          )
+        }
+
+        if (!linkedMember.is_active) {
+          return NextResponse.json(
+            { error: "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới." },
+            { status: 409 },
+          )
+        }
+      }
+
       const { error } = await auth.supabase
         .from("app_users")
         .update({
@@ -578,7 +596,15 @@ export async function PATCH(request: NextRequest) {
         })
         .eq("auth_user_id", userId)
 
-      if (error) throw error
+      if (error) {
+        if (isInactiveMemberLinkError(error)) {
+          return NextResponse.json(
+            { error: "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới." },
+            { status: 409 },
+          )
+        }
+        throw error
+      }
 
       return NextResponse.json({ ok: true })
     }

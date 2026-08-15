@@ -99,6 +99,7 @@ type MemberRow = {
   id: string
   full_name: string
   phone: string | null
+  is_active: boolean
 }
 
 type GroupDetail = HuiGroupRow & {
@@ -351,7 +352,7 @@ export function DayHuiPage() {
           "id, group_id, period_number, scheduled_date, scheduled_at, opened_at, winner_share_id, bid_amount, fee_amount, status, notes, created_at, updated_at",
         )
         .order("period_number"),
-      supabase.from("members").select("id, full_name, phone"),
+      supabase.from("members").select("id, full_name, phone, is_active"),
     ])
 
     const firstError =
@@ -1025,13 +1026,15 @@ function GroupDialog({
         </div>
 
         {scheduleLocked && (
-          <Card className="mt-4 border-warning/30 bg-warning-soft p-3 text-sm text-warning-foreground">
-            Dây đã có kỳ được khui hoặc chốt. Bạn vẫn sửa được
-            mã, tên, giờ khui, ghi chú và trạng thái. Ngày khui,
-            chu kỳ, số chân và tiền thảo lịch sử được khóa để bảo
-            vệ dữ liệu cũ. Giờ mới chỉ áp dụng cho các kỳ chưa
-            khui.
-          </Card>
+          <div
+            className="mt-4 rounded-lg border border-warning/30 bg-warning-soft p-3 text-sm leading-relaxed text-warning-foreground"
+            role="note"
+          >
+            Dây đã có kỳ được khui hoặc chốt. Các thông tin ảnh hưởng dữ liệu
+            cũ như ngày khui, chu kỳ, số chân và tiền thảo đã được khóa. Bạn
+            vẫn có thể sửa tên, mã dây, giờ khui, ghi chú và trạng thái. Giờ
+            khui mới chỉ áp dụng cho các kỳ chưa khui.
+          </div>
         )}
 
         <form
@@ -1439,6 +1442,10 @@ function ShareDialog({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  const activeMembers = members.filter((member) => member.is_active)
+  const selectableMembers = members.filter(
+    (member) => member.is_active || member.id === share?.member_id,
+  )
   const usedNumbers = new Set(
     day.shares
       .filter((item) => item.id !== share?.id)
@@ -1451,7 +1458,7 @@ function ShareDialog({
   ).filter((number) => !usedNumbers.has(number))
 
   const [memberId, setMemberId] = useState(
-    share?.member_id ?? members[0]?.id ?? "",
+    share?.member_id ?? activeMembers[0]?.id ?? "",
   )
   const [shareNumber, setShareNumber] = useState(
     String(
@@ -1498,6 +1505,24 @@ function ShareDialog({
 
     const supabase = createClient()
 
+    if (!share || memberId !== share.member_id) {
+      const { data: currentMember, error: memberError } = await supabase
+        .from("members")
+        .select("id, is_active")
+        .eq("id", memberId)
+        .maybeSingle()
+
+      if (memberError || !currentMember) {
+        setError("Không thể xác minh trạng thái hụi viên. Chưa lưu chân hụi.")
+        return
+      }
+
+      if (!currentMember.is_active) {
+        setError("Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới.")
+        return
+      }
+    }
+
     if (!share && addMode === "quick") {
       const count = Number(quantity)
 
@@ -1542,7 +1567,9 @@ function ShareDialog({
       if (saveError) {
         console.error(saveError)
         setError(
-          saveError.code === "23505"
+          saveError.message.includes("member_inactive_for_new_business")
+            ? "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới."
+            : saveError.code === "23505"
             ? "Một trong các số chân vừa chọn đã được sử dụng. Hãy thử lại."
             : "Không thể thêm nhanh các chân hụi.",
         )
@@ -1599,7 +1626,9 @@ function ShareDialog({
     if (saveError) {
       console.error(saveError)
       setError(
-        saveError.code === "23505"
+        saveError.message.includes("member_inactive_for_new_business")
+          ? "Hụi viên đang tạm ngưng, không thể thêm vào nghiệp vụ mới."
+          : saveError.code === "23505"
           ? "Số chân này đã tồn tại trong dây."
           : "Không thể lưu chân hụi.",
       )
@@ -1707,7 +1736,7 @@ function ShareDialog({
               <option value="">
                 Chọn hụi viên
               </option>
-              {[...members]
+              {[...selectableMembers]
                 .sort((a, b) =>
                   a.full_name.localeCompare(
                     b.full_name,
@@ -1726,6 +1755,19 @@ function ShareDialog({
                   </option>
                 ))}
             </select>
+            {!share && activeMembers.length === 0 && (
+              <span className="text-xs font-normal text-muted-foreground">
+                Chưa có hụi viên đang hoạt động để thêm chân mới.
+              </span>
+            )}
+            {share &&
+              !members.find((member) => member.id === share.member_id)
+                ?.is_active && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  Hụi viên hiện tại đang tạm ngưng; bạn vẫn có thể giữ nguyên
+                  người này và sửa thông tin chân cũ.
+                </span>
+              )}
           </label>
 
           {!share && (

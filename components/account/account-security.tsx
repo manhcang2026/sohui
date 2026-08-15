@@ -8,6 +8,8 @@ import {
   RefreshCw,
   RotateCcw,
   Shield,
+  ShieldAlert,
+  ShieldCheck,
   Trash2,
   UserPlus,
 } from "lucide-react"
@@ -46,28 +48,12 @@ type MemberOption = {
   id: string
   full_name: string
   phone: string | null
+  is_active: boolean
 }
 
 type ManagedUser = CurrentProfile & {
   created_at: string
   updated_at: string
-}
-
-type MemberDeletePreflight = {
-  member: MemberOption
-  counts: {
-    hui_shares: number
-    hui_receipts: number
-    receipt_payments: number
-    receipts: number
-    transactions: number
-    app_users: number
-    profiles: number
-  }
-  has_business_history: boolean
-  has_login_link: boolean
-  member_delete_enabled: false
-  member_delete_blocker: string
 }
 
 export function AccountSecurity() {
@@ -106,7 +92,10 @@ export function AccountSecurity() {
           .select("auth_user_id, email, phone, display_name, role, member_id, is_active")
           .eq("auth_user_id", authUser.id)
           .maybeSingle(),
-        supabase.from("members").select("id, full_name, phone").order("full_name"),
+        supabase
+          .from("members")
+          .select("id, full_name, phone, is_active")
+          .order("full_name"),
       ])
 
     if (profileError || !profileData) {
@@ -312,6 +301,7 @@ function SuperAdminUsers({
   const [workingId, setWorkingId] = useState("")
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ManagedUser | null>(null)
+  const activeMembers = members.filter((member) => member.is_active)
 
   const suggestedPhone = useMemo(() => {
     if (!memberId) return ""
@@ -389,28 +379,47 @@ function SuperAdminUsers({
 
   async function updateUser(user: ManagedUser, next: Partial<ManagedUser>) {
     setWorkingId(user.auth_user_id)
-    const accessToken = await token()
-    const response = await fetch("/api/admin/users", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        auth_user_id: user.auth_user_id,
-        action: "update_profile",
-        display_name: next.display_name ?? user.display_name ?? displayVietnamPhone(user.phone),
-        role: next.role ?? user.role,
-        member_id: next.member_id !== undefined ? next.member_id : user.member_id,
-        is_active: next.is_active !== undefined ? next.is_active : user.is_active,
-      }),
-    })
-    const result = await response.json()
-    setWorkingId("")
+    try {
+      const accessToken = await token()
+      const response = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          auth_user_id: user.auth_user_id,
+          action: "update_profile",
+          display_name: next.display_name ?? user.display_name ?? displayVietnamPhone(user.phone),
+          role: next.role ?? user.role,
+          member_id: next.member_id !== undefined ? next.member_id : user.member_id,
+          is_active: next.is_active !== undefined ? next.is_active : user.is_active,
+        }),
+      })
+      const result = await response.json()
 
-    if (!response.ok) return onError(result.error ?? "Không cập nhật được tài khoản.")
-    onMessage("Đã cập nhật phân quyền.")
-    onReload()
+      if (!response.ok) {
+        onError(result.error ?? "Không cập nhật được tài khoản.")
+        return
+      }
+
+      onMessage(
+        next.is_active === undefined
+          ? "Đã cập nhật phân quyền."
+          : next.is_active
+            ? "Đã mở khóa đăng nhập."
+            : "Đã khóa đăng nhập; hồ sơ hụi viên không thay đổi.",
+      )
+      onReload()
+    } catch (caught) {
+      onError(
+        caught instanceof Error
+          ? caught.message
+          : "Không cập nhật được tài khoản.",
+      )
+    } finally {
+      setWorkingId("")
+    }
   }
 
   return (
@@ -433,12 +442,17 @@ function SuperAdminUsers({
             onChange={(e) => setMemberId(e.target.value)}
           >
             <option value="">Không liên kết</option>
-            {members.map((member) => (
+            {activeMembers.map((member) => (
               <option key={member.id} value={member.id}>
                 {member.full_name}{member.phone ? ` — ${member.phone}` : ""}
               </option>
             ))}
           </select>
+          {activeMembers.length === 0 && (
+            <span className="text-xs font-normal text-muted-foreground">
+              Chưa có hụi viên đang hoạt động để tạo liên kết mới.
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -525,20 +539,50 @@ function SuperAdminUsers({
                       onChange={(e) => void updateUser(user, { member_id: e.target.value || null })}
                     >
                       <option value="">Không liên kết</option>
-                      {members.map((member) => (
-                        <option key={member.id} value={member.id}>{member.full_name}</option>
-                      ))}
+                      {members
+                        .filter(
+                          (member) =>
+                            member.is_active || member.id === user.member_id,
+                        )
+                        .map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.full_name}
+                            {!member.is_active
+                              ? " — Tạm ngưng (đang liên kết)"
+                              : ""}
+                          </option>
+                        ))}
                     </select>
                   </td>
                   <td className="px-3 py-3">
-                    <button
-                      type="button"
-                      disabled={user.role === "super_admin" || workingId === user.auth_user_id}
-                      className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => void updateUser(user, { is_active: !user.is_active })}
-                    >
-                      {user.is_active ? "Hoạt động" : "Khóa"}
-                    </button>
+                    <div className="flex min-w-[170px] flex-col items-start gap-2">
+                      <StatusBadge
+                        label={user.is_active ? "Đăng nhập hoạt động" : "Đã khóa"}
+                        tone={user.is_active ? "success" : "warning"}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          user.auth_user_id === currentUserId ||
+                          user.role === "super_admin" ||
+                          workingId === user.auth_user_id
+                        }
+                        onClick={() =>
+                          void updateUser(user, { is_active: !user.is_active })
+                        }
+                      >
+                        {workingId === user.auth_user_id ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : user.is_active ? (
+                          <ShieldAlert className="size-4" />
+                        ) : (
+                          <ShieldCheck className="size-4" />
+                        )}
+                        {user.is_active ? "Khóa đăng nhập" : "Mở khóa đăng nhập"}
+                      </Button>
+                    </div>
                   </td>
                   <td className="px-3 py-3">
                     <div className="flex flex-wrap gap-2">
@@ -607,55 +651,15 @@ function DeleteAccountDialog({
   onClose: () => void
   onDeleted: (message: string) => void
 }) {
-  const [preflight, setPreflight] = useState<MemberDeletePreflight | null>(null)
-  const [loadingPreflight, setLoadingPreflight] = useState(false)
   const [reason, setReason] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const [error, setError] = useState("")
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
-    setPreflight(null)
     setReason("")
     setConfirmation("")
     setError("")
-
-    if (!target?.member_id) return
-
-    const targetMemberId = target.member_id
-    let active = true
-    setLoadingPreflight(true)
-
-    async function loadPreflight() {
-      try {
-        const { data } = await createClient().auth.getSession()
-        const accessToken = data.session?.access_token ?? ""
-        const response = await fetch(
-          `/api/admin/users?member_id=${encodeURIComponent(targetMemberId)}`,
-          { headers: { Authorization: `Bearer ${accessToken}` } },
-        )
-        const result = await response.json()
-        if (!response.ok) {
-          throw new Error(result.error ?? "Không kiểm tra được hồ sơ.")
-        }
-        if (active) setPreflight(result as MemberDeletePreflight)
-      } catch (caught) {
-        if (active) {
-          setError(
-            caught instanceof Error
-              ? caught.message
-              : "Không kiểm tra được hồ sơ.",
-          )
-        }
-      } finally {
-        if (active) setLoadingPreflight(false)
-      }
-    }
-
-    void loadPreflight()
-    return () => {
-      active = false
-    }
   }, [target])
 
   if (!target) return null
@@ -734,28 +738,14 @@ function DeleteAccountDialog({
     }
   }
 
-  const dependencyRows = preflight
-    ? ([
-        ["Chân hụi", preflight.counts.hui_shares],
-        ["Phiếu thu/chi", preflight.counts.hui_receipts],
-        ["Khoản đã thu/chi", preflight.counts.receipt_payments],
-        ["Phiếu cũ", preflight.counts.receipts],
-        ["Giao dịch cũ", preflight.counts.transactions],
-        [
-          "Liên kết đăng nhập",
-          preflight.counts.app_users + preflight.counts.profiles,
-        ],
-      ] as const)
-    : []
-
   return (
     <Dialog open onOpenChange={(open) => !open && !deleting && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Quản lý xóa tài khoản và hồ sơ</DialogTitle>
+          <DialogTitle>Xóa tài khoản đăng nhập</DialogTitle>
           <DialogDescription>
-            Hai thao tác dưới đây có phạm vi hoàn toàn khác nhau. Hãy đọc kỹ
-            trước khi xác nhận.
+            Chỉ xóa quyền đăng nhập. Hồ sơ hụi viên và toàn bộ lịch sử nghiệp
+            vụ, phiếu và tiền vẫn được giữ nguyên.
           </DialogDescription>
         </DialogHeader>
 
@@ -804,68 +794,6 @@ function DeleteAccountDialog({
               )}
             </label>
           </div>
-        </section>
-
-        <section className="rounded-lg border border-border p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="font-bold">Xóa hồ sơ hụi viên</h3>
-              <p className="text-sm text-muted-foreground">
-                Chỉ dành cho hồ sơ hoàn toàn chưa phát sinh nghiệp vụ.
-              </p>
-            </div>
-            <StatusBadge label="Chưa bật" tone="warning" />
-          </div>
-
-          {!target.member_id ? (
-            <p className="mt-3 text-sm text-muted-foreground">
-              Tài khoản này không liên kết hồ sơ hụi viên.
-            </p>
-          ) : loadingPreflight ? (
-            <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircle className="size-4 animate-spin" />
-              Đang kiểm tra phụ thuộc bằng truy vấn đếm chính xác...
-            </p>
-          ) : preflight ? (
-            <>
-              <div className="mt-3 overflow-hidden rounded-md border border-border">
-                <table className="w-full text-sm">
-                  <tbody className="divide-y divide-border">
-                    {dependencyRows.map(([label, count]) => (
-                      <tr key={label}>
-                        <td className="px-3 py-2 text-muted-foreground">
-                          {label}
-                        </td>
-                        <td className="px-3 py-2 text-right font-bold tabular-nums">
-                          {count}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-3 text-sm font-medium text-warning-foreground">
-                {preflight.member_delete_blocker}
-              </p>
-              {preflight.has_business_history && (
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Không xóa lịch sử. Có thể khóa tài khoản, ngừng sử dụng hồ
-                  sơ cho nghiệp vụ mới, hoặc chỉ xóa cổng đăng nhập.
-                </p>
-              )}
-            </>
-          ) : null}
-
-          <Button
-            type="button"
-            variant="outline"
-            className="mt-3"
-            disabled
-            title="Chờ RPC atomic fail-closed được review và triển khai"
-          >
-            <Trash2 className="size-4" />
-            Xóa hồ sơ hụi viên
-          </Button>
         </section>
 
         {error && (

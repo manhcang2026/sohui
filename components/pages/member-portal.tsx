@@ -12,7 +12,10 @@ import {
   WalletCards,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { calculateGroupPerformance } from "@/lib/hui-performance"
+import {
+  calculateGroupPerformance,
+  getValidPerformancePeriods,
+} from "@/lib/hui-performance"
 import { ChangePinForm } from "@/components/account/account-security"
 import {
   AppPage,
@@ -92,6 +95,77 @@ type PaymentRow = {
   direction: "collect" | "pay"
   amount: number
   status: string
+  source_period_id: string | null
+}
+
+type ReceiptSource = {
+  periodId: string
+  groupCode: string | null
+  groupName: string
+  periodNumber: number
+  scheduledDate: string
+}
+
+type ReceiptSourceContext = {
+  kind: "single" | "aggregate" | "legacy"
+  sources: ReceiptSource[]
+  hasUnknownSource: boolean
+}
+
+type PageResult<T> = {
+  data: T[] | null
+  error: unknown
+}
+
+const PAGE_SIZE = 1000
+const FILTER_BATCH_SIZE = 100
+
+function chunk<T>(items: T[], size: number) {
+  const result: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size))
+  }
+  return result
+}
+
+async function fetchAllPages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>,
+) {
+  const result: T[] = []
+  let from = 0
+
+  while (true) {
+    const { data, error } = await fetchPage(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+
+    const rows = data ?? []
+    result.push(...rows)
+    if (rows.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+
+  return result
+}
+
+async function fetchRowsByIds<T>(
+  ids: string[],
+  fetchPage: (
+    batchIds: string[],
+    from: number,
+    to: number,
+  ) => PromiseLike<PageResult<T>>,
+) {
+  const result: T[] = []
+
+  for (const batchIds of chunk(ids, FILTER_BATCH_SIZE)) {
+    result.push(
+      ...(await fetchAllPages<T>((from, to) =>
+        fetchPage(batchIds, from, to),
+      )),
+    )
+  }
+
+  return result
 }
 
 function formatVND(value: number) {
@@ -110,6 +184,7 @@ function formatDate(value: string) {
 export function MemberPortalPage({ profile }: { profile: Profile }) {
   const [member, setMember] = useState<MemberRow | null>(null)
   const [shares, setShares] = useState<ShareRow[]>([])
+  const [groupShares, setGroupShares] = useState<ShareRow[]>([])
   const [groups, setGroups] = useState<GroupRow[]>([])
   const [periods, setPeriods] = useState<PeriodRow[]>([])
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
@@ -130,65 +205,96 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     setError("")
     const supabase = createClient()
 
-    const [
-      memberResult,
-      sharesResult,
-      groupsResult,
-      periodsResult,
-      receiptsResult,
-      paymentsResult,
-    ] = await Promise.all([
-      supabase
-        .from("members")
-        .select("id, full_name, phone")
-        .eq("id", profile.member_id)
-        .single(),
-      supabase
-        .from("hui_shares")
-        .select("id, group_id, member_id, share_number, status"),
-      supabase
-        .from("hui_groups")
-        .select(
-          "id, code, name, contribution_amount, total_shares, status",
+    try {
+      const [memberResult, ownShares, receiptRows] = await Promise.all([
+        supabase
+          .from("members")
+          .select("id, full_name, phone")
+          .eq("id", profile.member_id)
+          .single(),
+        fetchAllPages<ShareRow>((from, to) =>
+          supabase
+            .from("hui_shares")
+            .select("id, group_id, member_id, share_number, status")
+            .eq("member_id", profile.member_id)
+            .order("id")
+            .range(from, to),
         ),
-      supabase
-        .from("hui_periods")
-        .select(
-          "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, status",
+        fetchAllPages<ReceiptRow>((from, to) =>
+          supabase
+            .from("hui_receipts")
+            .select(
+              "id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
+            )
+            .eq("member_id", profile.member_id)
+            .order("receipt_date", { ascending: false })
+            .order("id", { ascending: false })
+            .range(from, to),
         ),
-      supabase
-        .from("hui_receipts")
-        .select(
-          "id, receipt_date, source_total_pay, source_total_receive, settlement_amount, status",
-        )
-        .order("receipt_date", { ascending: false }),
-      supabase
-        .from("receipt_payments")
-        .select("id, receipt_id, direction, amount, status"),
-    ])
+      ])
 
-    const firstError =
-      memberResult.error ??
-      sharesResult.error ??
-      groupsResult.error ??
-      periodsResult.error ??
-      receiptsResult.error ??
-      paymentsResult.error
+      if (memberResult.error) throw memberResult.error
 
-    if (firstError) {
-      console.error(firstError)
+      const groupIds = [...new Set(ownShares.map((share) => share.group_id))]
+      const receiptIds = receiptRows.map((receipt) => receipt.id)
+
+      const [groupRows, allGroupShares, periodRows, paymentRows] =
+        await Promise.all([
+          fetchRowsByIds<GroupRow>(groupIds, (ids, from, to) =>
+            supabase
+              .from("hui_groups")
+              .select(
+                "id, code, name, contribution_amount, total_shares, status",
+              )
+              .in("id", ids)
+              .order("id")
+              .range(from, to),
+          ),
+          fetchRowsByIds<ShareRow>(groupIds, (ids, from, to) =>
+            supabase
+              .from("hui_shares")
+              .select("id, group_id, member_id, share_number, status")
+              .in("group_id", ids)
+              .order("id")
+              .range(from, to),
+          ),
+          fetchRowsByIds<PeriodRow>(groupIds, (ids, from, to) =>
+            supabase
+              .from("hui_periods")
+              .select(
+                "id, group_id, period_number, scheduled_date, winner_share_id, bid_amount, status",
+              )
+              .in("group_id", ids)
+              .order("group_id")
+              .order("period_number")
+              .range(from, to),
+          ),
+          fetchRowsByIds<PaymentRow>(receiptIds, (ids, from, to) =>
+            supabase
+              .from("receipt_payments")
+              .select(
+                "id, receipt_id, direction, amount, status, source_period_id",
+              )
+              .in("receipt_id", ids)
+              .eq("status", "active")
+              .order("id")
+              .range(from, to),
+          ),
+        ])
+
+      setMember((memberResult.data as MemberRow | null) ?? null)
+      setShares(ownShares)
+      setGroupShares(allGroupShares)
+      setGroups(groupRows)
+      setPeriods(periodRows)
+      setReceipts(receiptRows)
+      setPayments(paymentRows)
+    } catch (caught) {
+      console.error(caught)
       setError("Không thể tải đầy đủ dữ liệu của bạn. Vui lòng thử lại.")
+    } finally {
       setLoading(false)
-      return
     }
-
-    setMember((memberResult.data as MemberRow | null) ?? null)
-    setShares((sharesResult.data ?? []) as ShareRow[])
-    setGroups((groupsResult.data ?? []) as GroupRow[])
-    setPeriods((periodsResult.data ?? []) as PeriodRow[])
-    setReceipts((receiptsResult.data ?? []) as ReceiptRow[])
-    setPayments((paymentsResult.data ?? []) as PaymentRow[])
-    setLoading(false)
   }
 
   const summary = useMemo(() => {
@@ -233,9 +339,14 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     >()
 
     for (const group of groups) {
-      const groupShares = shares.filter((share) => share.group_id === group.id)
+      const allSharesInGroup = groupShares.filter(
+        (share) => share.group_id === group.id,
+      )
       const groupPeriods = periods.filter((period) => period.group_id === group.id)
-      const performance = calculateGroupPerformance(groupShares, groupPeriods)
+      const performance = calculateGroupPerformance(
+        allSharesInGroup,
+        groupPeriods,
+      )
 
       map.set(
         group.id,
@@ -245,7 +356,65 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
     }
 
     return map
-  }, [groups, periods, profile.member_id, shares])
+  }, [groupShares, groups, periods, profile.member_id])
+
+  const receiptSourcesById = useMemo(() => {
+    const groupById = new Map(groups.map((group) => [group.id, group]))
+    const periodById = new Map(periods.map((period) => [period.id, period]))
+    const paymentsByReceipt = new Map<string, PaymentRow[]>()
+
+    for (const payment of payments) {
+      const current = paymentsByReceipt.get(payment.receipt_id) ?? []
+      current.push(payment)
+      paymentsByReceipt.set(payment.receipt_id, current)
+    }
+
+    const result = new Map<string, ReceiptSourceContext>()
+
+    for (const receipt of receipts) {
+      const receiptPayments = paymentsByReceipt.get(receipt.id) ?? []
+      let hasUnknownSource = receiptPayments.length === 0
+      const sourceByPeriodId = new Map<string, ReceiptSource>()
+
+      for (const payment of receiptPayments) {
+        if (!payment.source_period_id) {
+          hasUnknownSource = true
+          continue
+        }
+
+        const period = periodById.get(payment.source_period_id)
+        const group = period ? groupById.get(period.group_id) : null
+        if (!period || !group) {
+          hasUnknownSource = true
+          continue
+        }
+
+        sourceByPeriodId.set(period.id, {
+          periodId: period.id,
+          groupCode: group.code,
+          groupName: group.name,
+          periodNumber: period.period_number,
+          scheduledDate: period.scheduled_date,
+        })
+      }
+
+      const sources = [...sourceByPeriodId.values()].sort(
+        (a, b) =>
+          a.scheduledDate.localeCompare(b.scheduledDate) ||
+          a.periodNumber - b.periodNumber,
+      )
+      const kind =
+        sources.length === 0
+          ? "legacy"
+          : sources.length === 1 && !hasUnknownSource
+            ? "single"
+            : "aggregate"
+
+      result.set(receipt.id, { kind, sources, hasUnknownSource })
+    }
+
+    return result
+  }, [groups, payments, periods, receipts])
 
   async function logout() {
     await createClient().auth.signOut()
@@ -348,15 +517,25 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
           ) : (
           <div className="grid gap-3 lg:grid-cols-2">
             {groups.map((group) => {
-              const groupShares = shares.filter(
+              const memberGroupShares = shares.filter(
                 (share) => share.group_id === group.id,
               )
-              if (groupShares.length === 0) return null
+              if (memberGroupShares.length === 0) return null
 
               const groupPeriods = periods.filter(
                 (period) => period.group_id === group.id,
               )
-              const ownIds = new Set(groupShares.map((share) => share.id))
+              const validPeriods = getValidPerformancePeriods(groupPeriods)
+              const latestValidPeriod = validPeriods.at(-1)?.period_number ?? 0
+              const totalPeriods = groupPeriods.length
+              const periodProgress = validPeriods.length
+                ? `Đã khui đến kỳ ${latestValidPeriod}/${totalPeriods}`
+                : totalPeriods > 0
+                  ? `Chưa khui · 0/${totalPeriods} kỳ`
+                  : "Chưa có lịch kỳ"
+              const ownIds = new Set(
+                memberGroupShares.map((share) => share.id),
+              )
               const won = groupPeriods.filter(
                 (period) =>
                   period.winner_share_id &&
@@ -383,7 +562,10 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {formatVND(group.contribution_amount)}/chân ·{" "}
-                    {groupShares.length} chân · đã hốt {won}
+                    {memberGroupShares.length} chân · đã hốt {won}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {periodProgress}
                   </p>
 
                   {performance && (
@@ -406,7 +588,11 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                             className="mt-0.5 block max-w-full overflow-x-auto"
                           />
                           {performance.liveShares > 0 && (
-                            <p className="mt-0.5 text-xs text-muted-foreground">Tạm tính theo kỳ hiện tại</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {validPeriods.length
+                                ? `Tạm tính đến hết kỳ ${latestValidPeriod}/${totalPeriods}`
+                                : "Chưa có kỳ đã khui để tính"}
+                            </p>
                           )}
                         </div>
                         <span className="text-xs font-medium text-primary">
@@ -508,14 +694,56 @@ export function MemberPortalPage({ profile }: { profile: Profile }) {
                 Number(receipt.source_total_pay || 0) -
                 Number(receipt.source_total_receive || 0) +
                 Number(receipt.settlement_amount || 0)
+              const sourceContext = receiptSourcesById.get(receipt.id) ?? {
+                kind: "legacy" as const,
+                sources: [],
+                hasUnknownSource: true,
+              }
 
               return (
                 <Card key={receipt.id} className="p-4">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                     <div className="min-w-0">
-                      <p className="font-bold">
-                        {formatDate(receipt.receipt_date)}
-                      </p>
+                      {sourceContext.kind === "single" ? (
+                        <>
+                          <p className="break-words font-bold">
+                            {sourceContext.sources[0].groupCode || "Chưa có mã"}
+                            {" · "}
+                            {sourceContext.sources[0].groupName}
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Kỳ {sourceContext.sources[0].periodNumber} ·{" "}
+                            {formatDate(
+                              sourceContext.sources[0].scheduledDate,
+                            )}
+                          </p>
+                        </>
+                      ) : sourceContext.kind === "aggregate" ? (
+                        <>
+                          <p className="font-bold">Phiếu tổng hợp</p>
+                          <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                            {sourceContext.sources.map((source) => (
+                              <p key={source.periodId} className="break-words">
+                                {source.groupCode || source.groupName} · Kỳ{" "}
+                                {source.periodNumber} ·{" "}
+                                {formatDate(source.scheduledDate)}
+                              </p>
+                            ))}
+                            {sourceContext.hasUnknownSource && (
+                              <p>Dữ liệu cũ chưa xác định dây/kỳ</p>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-bold">
+                            Dữ liệu cũ chưa xác định dây/kỳ
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Ngày phiếu: {formatDate(receipt.receipt_date)}
+                          </p>
+                        </>
+                      )}
                       <StatusBadge
                         label={receipt.status === "paid" ? "Đã thanh toán" : receipt.status === "open" ? "Đang mở" : receipt.status === "cancelled" ? "Đã hủy" : receipt.status}
                         tone={receipt.status === "paid" ? "success" : receipt.status === "cancelled" ? "danger" : "warning"}
